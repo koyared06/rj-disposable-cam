@@ -33,6 +33,15 @@ type CameraUsage = {
   shotsLimit: number;
   shotsLeft: number | null;
 };
+type LocalShotStatus = "draft" | "queued" | "uploading" | "failed";
+type LocalShot = {
+  id: string;
+  file: File;
+  previewUrl: string;
+  selected: boolean;
+  status: LocalShotStatus;
+  createdAt: number;
+};
 type CameraFacing = "environment" | "user";
 type GalleryFilterMode = "all" | "mine" | "capturer";
 
@@ -147,10 +156,9 @@ export default function CameraLandingPage() {
   const [guestNameError, setGuestNameError] = useState("");
   const [started, setStarted] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [uploadQueue, setUploadQueue] = useState<File[]>([]);
+  const [localShots, setLocalShots] = useState<LocalShot[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadedShotsCount, setUploadedShotsCount] = useState(0);
-  const [failedShotsCount, setFailedShotsCount] = useState(0);
   const [showStartNotice, setShowStartNotice] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [error, setError] = useState("");
@@ -163,10 +171,19 @@ export default function CameraLandingPage() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
-  const pendingUploads = uploadQueue.length + (uploading ? 1 : 0);
+  const pendingUploads = localShots.filter(
+    (shot) => shot.status === "queued" || shot.status === "uploading",
+  ).length;
+  const failedShotsCount = localShots.filter((shot) => shot.status === "failed").length;
+  const unsentShotsCount = localShots.length;
+  const selectedForUploadCount = localShots.filter(
+    (shot) =>
+      shot.selected && (shot.status === "draft" || shot.status === "failed"),
+  ).length;
+  const capturedShotsCount = usage.shotsUsed + localShots.length;
   const effectiveShotsLeft =
     usage.shotsLimit > 0
-      ? Math.max(0, usage.shotsLimit - (usage.shotsUsed + pendingUploads))
+      ? Math.max(0, usage.shotsLimit - capturedShotsCount)
       : null;
   const canCaptureMoreShots =
     usage.shotsLimit <= 0 || effectiveShotsLeft === null || effectiveShotsLeft > 0;
@@ -407,33 +424,104 @@ export default function CameraLandingPage() {
     }
   }, [cameraToken, deviceId, eventId, loadGallery, normalizedGuestName]);
 
-  function enqueuePhotoUpload(fileToUpload: File) {
+  function addLocalShot(fileToUpload: File) {
     if (!canCaptureMoreShots) {
       setFeedback("Shot limit reached.");
       return false;
     }
 
-    setUploadQueue((current) => [...current, fileToUpload]);
-    setFeedback("Shot queued. Keep this app open while uploads complete.");
+    const localId =
+      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const preview = URL.createObjectURL(fileToUpload);
+    setLocalShots((current) => [
+      ...current,
+      {
+        id: localId,
+        file: fileToUpload,
+        previewUrl: preview,
+        selected: true,
+        status: "draft",
+        createdAt: Date.now(),
+      },
+    ]);
+    setFeedback("Shot saved locally. Select and upload when ready.");
     return true;
   }
 
+  function toggleLocalShotSelection(id: string) {
+    setLocalShots((current) =>
+      current.map((shot) =>
+        shot.id === id ? { ...shot, selected: !shot.selected } : shot,
+      ),
+    );
+  }
+
+  function removeLocalShot(id: string) {
+    setLocalShots((current) => {
+      const target = current.find((shot) => shot.id === id);
+      if (target) {
+        URL.revokeObjectURL(target.previewUrl);
+      }
+      return current.filter((shot) => shot.id !== id);
+    });
+  }
+
+  function queueSelectedShotsForUpload() {
+    if (selectedForUploadCount < 1) {
+      setFeedback("Select at least one shot to upload.");
+      return;
+    }
+
+    setLocalShots((current) =>
+      current.map((shot) =>
+        shot.selected && (shot.status === "draft" || shot.status === "failed")
+          ? { ...shot, status: "queued" }
+          : shot,
+      ),
+    );
+    setFeedback(
+      `Uploading ${selectedForUploadCount} selected shot${
+        selectedForUploadCount === 1 ? "" : "s"
+      } in background. Keep this app open.`,
+    );
+  }
+
   useEffect(() => {
-    if (uploading || uploadQueue.length === 0) return;
+    if (uploading) return;
+    const nextQueuedShot = localShots.find((shot) => shot.status === "queued");
+    if (!nextQueuedShot) return;
 
     let cancelled = false;
-    const nextFile = uploadQueue[0];
+    const nextFile = nextQueuedShot.file;
+    const nextId = nextQueuedShot.id;
 
     const processNext = async () => {
+      setLocalShots((current) =>
+        current.map((shot) =>
+          shot.id === nextId ? { ...shot, status: "uploading" } : shot,
+        ),
+      );
       setUploading(true);
       const ok = await uploadPhotoNow(nextFile);
       if (cancelled) return;
 
-      setUploadQueue((current) => current.slice(1));
       if (ok) {
+        setLocalShots((current) => {
+          const target = current.find((shot) => shot.id === nextId);
+          if (target) {
+            URL.revokeObjectURL(target.previewUrl);
+          }
+          return current.filter((shot) => shot.id !== nextId);
+        });
         setUploadedShotsCount((current) => current + 1);
       } else {
-        setFailedShotsCount((current) => current + 1);
+        setLocalShots((current) =>
+          current.map((shot) =>
+            shot.id === nextId ? { ...shot, status: "failed" } : shot,
+          ),
+        );
       }
       setUploading(false);
     };
@@ -443,7 +531,7 @@ export default function CameraLandingPage() {
     return () => {
       cancelled = true;
     };
-  }, [uploadQueue, uploading, uploadPhotoNow]);
+  }, [localShots, uploading, uploadPhotoNow]);
 
   async function captureShot() {
     if (!ensureGuestName()) return;
@@ -515,7 +603,7 @@ export default function CameraLandingPage() {
       type: "image/jpeg",
     });
     setSelectedFile(fileToUpload);
-    enqueuePhotoUpload(fileToUpload);
+    addLocalShot(fileToUpload);
   }
 
   async function onUpload(event: FormEvent<HTMLFormElement>) {
@@ -526,7 +614,7 @@ export default function CameraLandingPage() {
       setFeedback("Please capture or pick a photo first.");
       return;
     }
-    if (enqueuePhotoUpload(selectedFile)) {
+    if (addLocalShot(selectedFile)) {
       setSelectedFile(null);
     }
   }
@@ -697,7 +785,7 @@ export default function CameraLandingPage() {
   }, [cameraToken, deviceId, error, eventId, loadGallery, loading]);
 
   useEffect(() => {
-    if (pendingUploads < 1) return;
+    if (unsentShotsCount < 1) return;
 
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
       event.preventDefault();
@@ -706,16 +794,19 @@ export default function CameraLandingPage() {
 
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-  }, [pendingUploads]);
+  }, [unsentShotsCount]);
 
   useEffect(
     () => () => {
       if (previewUrl) {
         URL.revokeObjectURL(previewUrl);
       }
+      localShots.forEach((shot) => {
+        URL.revokeObjectURL(shot.previewUrl);
+      });
       stopCamera(false);
     },
-    [previewUrl, stopCamera],
+    [localShots, previewUrl, stopCamera],
   );
 
   useEffect(() => {
@@ -910,6 +1001,14 @@ export default function CameraLandingPage() {
     }
     return galleryItems;
   })();
+  const featuredGalleryItem = filteredGalleryItems[0] ?? null;
+  const shouldBlurFeaturedGalleryItem =
+    Boolean(featuredGalleryItem) &&
+    isGalleryLockedForViewer &&
+    !featuredGalleryItem.isOwnPhoto;
+  const localShotsNewestFirst = [...localShots].sort(
+    (a, b) => b.createdAt - a.createdAt,
+  );
   const isGuestNameModalVisible =
     showGuestNameModal || (!showLandingScreen && !normalizedGuestName);
 
@@ -1071,7 +1170,8 @@ export default function CameraLandingPage() {
             </div>
             <div className="pointer-events-none absolute inset-x-0 top-20 z-10 px-6 text-center">
               <p className="text-[11px] text-white/80">
-                Host shot limit: {usage.shotsLimit > 0 ? usage.shotsLimit : "Unlimited"}
+                Host shot limit: {usage.shotsLimit > 0 ? usage.shotsLimit : "Unlimited"} •
+                Captured: {capturedShotsCount}
               </p>
               {feedback ? <p className="mt-1 text-xs text-amber-200">{feedback}</p> : null}
               {pendingUploads > 0 ? (
@@ -1079,9 +1179,15 @@ export default function CameraLandingPage() {
                   Uploading {pendingUploads} shot{pendingUploads === 1 ? "" : "s"} in background.
                   Keep this app open.
                 </p>
-              ) : uploadedShotsCount > 0 ? (
+              ) : uploadedShotsCount > 0 && unsentShotsCount < 1 ? (
                 <p className="mt-1 text-xs text-emerald-200">
                   All queued shots uploaded ({uploadedShotsCount} total).
+                </p>
+              ) : null}
+              {unsentShotsCount > 0 ? (
+                <p className="mt-1 text-xs text-white/80">
+                  {unsentShotsCount} local shot{unsentShotsCount === 1 ? "" : "s"} not fully
+                  uploaded yet.
                 </p>
               ) : null}
               {failedShotsCount > 0 ? (
@@ -1347,12 +1453,12 @@ export default function CameraLandingPage() {
             {showGallerySheet ? (
               <div className="absolute inset-0 z-40 flex h-full flex-col bg-black">
                 <div className="relative h-56 overflow-hidden">
-                  {filteredGalleryItems[0]?.imageUrl ? (
+                  {featuredGalleryItem?.imageUrl ? (
                     <img
-                      src={filteredGalleryItems[0].imageUrl}
+                      src={featuredGalleryItem.imageUrl}
                       alt="Gallery cover"
                       className={`h-full w-full object-cover ${
-                        isGalleryLockedForViewer ? "blur-md brightness-75" : "brightness-75"
+                        shouldBlurFeaturedGalleryItem ? "blur-md brightness-75" : "brightness-75"
                       }`}
                     />
                   ) : (
@@ -1407,15 +1513,127 @@ export default function CameraLandingPage() {
                 </div>
 
                 <div className="flex-1 overflow-y-auto px-4 pb-24 pt-4">
+                  {localShotsNewestFirst.length > 0 ? (
+                    <section className="mb-4 rounded-2xl border border-white/20 bg-black/35 p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <p className="text-sm font-semibold text-white">My Upload Queue</p>
+                          <p className="text-xs text-white/70">
+                            Select only the shots you want to upload.
+                          </p>
+                        </div>
+                        <span className="text-xs text-white/75">
+                          {localShotsNewestFirst.length} shot
+                          {localShotsNewestFirst.length === 1 ? "" : "s"}
+                        </span>
+                      </div>
+
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          className="rounded-full border border-white/25 bg-white/10 px-3 py-1.5 text-xs text-white"
+                          onClick={() =>
+                            setLocalShots((current) =>
+                              current.map((shot) =>
+                                shot.status === "draft" || shot.status === "failed"
+                                  ? { ...shot, selected: true }
+                                  : shot,
+                              ),
+                            )
+                          }
+                        >
+                          Select All
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-full border border-white/25 bg-white/10 px-3 py-1.5 text-xs text-white"
+                          onClick={() =>
+                            setLocalShots((current) =>
+                              current.map((shot) =>
+                                shot.status === "draft" || shot.status === "failed"
+                                  ? { ...shot, selected: false }
+                                  : shot,
+                              ),
+                            )
+                          }
+                        >
+                          Clear Selection
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-full border border-emerald-300/40 bg-emerald-300/20 px-3 py-1.5 text-xs font-semibold text-emerald-100 disabled:opacity-40"
+                          onClick={() => queueSelectedShotsForUpload()}
+                          disabled={selectedForUploadCount < 1}
+                        >
+                          Upload Selected ({selectedForUploadCount})
+                        </button>
+                      </div>
+
+                      <div className="mt-3 grid grid-cols-3 gap-2">
+                        {localShotsNewestFirst.map((shot) => (
+                          <article
+                            key={shot.id}
+                            className="overflow-hidden rounded-xl border border-white/15 bg-black/40"
+                          >
+                            <button
+                              type="button"
+                              className="relative block h-24 w-full"
+                              onClick={() => toggleLocalShotSelection(shot.id)}
+                              disabled={shot.status === "queued" || shot.status === "uploading"}
+                            >
+                              <img
+                                src={shot.previewUrl}
+                                alt="Local queued shot preview"
+                                className={`h-full w-full object-cover ${
+                                  shot.status === "queued" || shot.status === "uploading"
+                                    ? "opacity-70"
+                                    : ""
+                                }`}
+                              />
+                              <span
+                                className={`absolute left-1 top-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+                                  shot.selected
+                                    ? "bg-lime-300 text-black"
+                                    : "bg-black/60 text-white"
+                                }`}
+                              >
+                                {shot.selected ? "Selected" : "Tap"}
+                              </span>
+                            </button>
+                            <div className="flex items-center justify-between px-2 py-1">
+                              <span className="text-[10px] text-white/75">
+                                {shot.status === "draft"
+                                  ? "Ready"
+                                  : shot.status === "queued"
+                                  ? "Queued"
+                                  : shot.status === "uploading"
+                                  ? "Uploading"
+                                  : "Failed"}
+                              </span>
+                              <button
+                                type="button"
+                                className="text-[10px] text-rose-200 disabled:opacity-40"
+                                onClick={() => removeLocalShot(shot.id)}
+                                disabled={shot.status === "uploading"}
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    </section>
+                  ) : null}
+
                   {galleryFilterMode === "capturer" ? (
                     <div className="mb-3">
-                      <label className="text-xs text-white/70">Choose a Capturer</label>
+                      <label className="text-xs text-white/70">Choose a POV</label>
                       <select
                         className="mt-1 w-full rounded-xl border border-white/20 bg-black/45 px-3 py-2 text-sm text-white"
                         value={selectedCapturer}
                         onChange={(event) => setSelectedCapturer(event.target.value)}
                       >
-                        <option value="">All Capturers</option>
+                        <option value="">All POVs</option>
                         {capturerOptions.map((name) => (
                           <option key={name} value={name}>
                             {name}
@@ -1440,7 +1658,9 @@ export default function CameraLandingPage() {
                             src={item.imageUrl}
                             alt={`Photo by ${item.uploaderName}`}
                             className={`h-52 w-full object-cover ${
-                              isGalleryLockedForViewer ? "blur-md brightness-75" : ""
+                              isGalleryLockedForViewer && !item.isOwnPhoto
+                                ? "blur-md brightness-75"
+                                : ""
                             }`}
                             loading="lazy"
                           />
@@ -1459,7 +1679,8 @@ export default function CameraLandingPage() {
                     <div className="rounded-2xl border border-white/20 bg-black/75 px-4 py-3 text-center">
                       <p className="text-sm font-semibold text-white">Gallery is locked</p>
                       <p className="mt-1 text-xs text-white/75">
-                        Photos will fully unlock based on your admin unlock schedule.
+                        Other guests&apos; shots stay blurred until admin unlock time. Your own
+                        shots remain clear.
                       </p>
                     </div>
                   </div>
@@ -1486,7 +1707,7 @@ export default function CameraLandingPage() {
                     }`}
                     onClick={() => setGalleryFilterMode("mine")}
                   >
-                    My Capture
+                    My POV
                   </button>
                   <button
                     type="button"
@@ -1497,7 +1718,7 @@ export default function CameraLandingPage() {
                     }`}
                     onClick={() => setGalleryFilterMode("capturer")}
                   >
-                    Choose a Capturer
+                    Choose a POV
                   </button>
                 </div>
               </div>
@@ -1533,7 +1754,7 @@ export default function CameraLandingPage() {
                   className="w-full rounded-full bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-black disabled:opacity-40"
                   disabled={!selectedFile || !canCaptureMoreShots}
                 >
-                  {pendingUploads > 0 ? "Queue Upload" : "Upload Selected Photo"}
+                  Add To My Shots
                 </button>
               </form>
             </section>
