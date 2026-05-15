@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import QRCode from "qrcode";
 
 type CameraSessionSettings = {
@@ -168,14 +168,12 @@ export default function CameraLandingPage() {
   });
   const [uploaderName, setUploaderName] = useState("");
   const [guestNameDraft, setGuestNameDraft] = useState("");
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [showGuestNameModal, setShowGuestNameModal] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraFacing, setCameraFacing] = useState<CameraFacing>("environment");
   const [cameraTransitioning, setCameraTransitioning] = useState(false);
   const [keepCameraActive, setKeepCameraActive] = useState(true);
   const [cameraPermissionFailed, setCameraPermissionFailed] = useState(false);
-  const [showFallbackUpload, setShowFallbackUpload] = useState(false);
   const [showGallerySheet, setShowGallerySheet] = useState(false);
   const [showGalleryLockNotice, setShowGalleryLockNotice] = useState(true);
   const [galleryFilterMode, setGalleryFilterMode] = useState<GalleryFilterMode>("all");
@@ -212,6 +210,7 @@ export default function CameraLandingPage() {
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const uploadPickerRef = useRef<HTMLInputElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const localShotsRef = useRef<LocalShot[]>([]);
   const queueProcessingRef = useRef(false);
@@ -267,7 +266,6 @@ export default function CameraLandingPage() {
   const returnToCameraLanding = useCallback(() => {
     stopCamera(true);
     setStarted(false);
-    setShowFallbackUpload(false);
     setShowGallerySheet(false);
     setShowQrSheet(false);
   }, [stopCamera]);
@@ -464,7 +462,6 @@ export default function CameraLandingPage() {
         }));
       }
 
-      setSelectedFile(fileToUpload);
       setFeedback("");
       await loadGallery();
       return true;
@@ -577,6 +574,61 @@ export default function CameraLandingPage() {
     ]);
     setFeedback("Shot saved locally. Select and upload when ready.");
     return true;
+  }
+
+  function addLocalFilesBatch(files: File[]) {
+    const imageFiles = files.filter((file) => file.type.startsWith("image/") && file.size > 0);
+    if (imageFiles.length < 1) {
+      setFeedback("Please select image files.");
+      return;
+    }
+
+    let added = 0;
+    setLocalShots((current) => {
+      const slotsLeft =
+        usage.shotsLimit > 0
+          ? Math.max(0, usage.shotsLimit - (usage.shotsUsed + current.length))
+          : Number.POSITIVE_INFINITY;
+
+      const nextItems: LocalShot[] = [];
+      for (const file of imageFiles) {
+        if (nextItems.length >= slotsLeft) break;
+        const localId =
+          typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+            ? crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        const previewUrl = URL.createObjectURL(file);
+        nextItems.push({
+          id: localId,
+          file,
+          previewUrl,
+          selected: true,
+          status: "draft",
+          createdAt: Date.now(),
+        });
+      }
+
+      added = nextItems.length;
+      return [...current, ...nextItems];
+    });
+
+    if (added < 1) {
+      setFeedback("Shot limit reached.");
+      return;
+    }
+    setFeedback(`${added} photo${added === 1 ? "" : "s"} added to your upload queue.`);
+  }
+
+  function openUploadPicker() {
+    if (!ensureGuestName()) return;
+    uploadPickerRef.current?.click();
+  }
+
+  function onUploadPickerChange(event: ChangeEvent<HTMLInputElement>) {
+    const selected = Array.from(event.target.files ?? []);
+    event.currentTarget.value = "";
+    if (selected.length < 1) return;
+    addLocalFilesBatch(selected);
   }
 
   function toggleLocalShotSelection(id: string) {
@@ -726,21 +778,7 @@ export default function CameraLandingPage() {
     const fileToUpload = new File([blob], `cam-${Date.now()}.jpg`, {
       type: "image/jpeg",
     });
-    setSelectedFile(fileToUpload);
     addLocalShot(fileToUpload);
-  }
-
-  async function onUpload(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!ensureGuestName()) return;
-
-    if (!selectedFile) {
-      setFeedback("Please capture or pick a photo first.");
-      return;
-    }
-    if (addLocalShot(selectedFile)) {
-      setSelectedFile(null);
-    }
   }
 
   async function openQrSheet() {
@@ -818,7 +856,12 @@ export default function CameraLandingPage() {
       });
       setSelectedZoom(level);
     } catch {
-      // Ignore zoom apply failures on unsupported browsers.
+      setZoomOptions((current) => {
+        const next = current.filter((zoom) => zoom !== level);
+        if (next.length < 1) return [1];
+        return next;
+      });
+      setSelectedZoom((current) => (current === level ? 1 : current));
     }
   }
 
@@ -1261,7 +1304,7 @@ export default function CameraLandingPage() {
               <button
                 type="button"
                 className="flex h-12 w-12 items-center justify-center rounded-xl border border-white/30 bg-black/45 text-white"
-                onClick={() => setShowFallbackUpload((current) => !current)}
+                onClick={() => openUploadPicker()}
                 aria-label="Upload photo"
               >
                 <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
@@ -1273,8 +1316,8 @@ export default function CameraLandingPage() {
               </button>
             </div>
 
-            <div className="pointer-events-none absolute inset-x-0 top-24 z-10 px-10 text-center">
-              <p className="truncate text-[2.9rem] font-semibold leading-none tracking-tight text-white drop-shadow-lg">
+            <div className="pointer-events-none absolute left-5 right-24 top-24 z-10 text-center">
+              <p className="truncate text-[2.35rem] font-semibold leading-none tracking-tight text-white drop-shadow-lg">
                 {settings.cameraEventTitle}
               </p>
               <p className="mt-1 truncate text-sm text-white/75 drop-shadow">
@@ -1285,7 +1328,7 @@ export default function CameraLandingPage() {
               {feedback ? <p className="mt-1 text-xs text-amber-200">{feedback}</p> : null}
             </div>
 
-            <div className="absolute right-4 top-28 z-10 overflow-hidden rounded-[1.7rem] border border-white/20 bg-black/45 backdrop-blur-sm">
+            <div className="absolute right-4 top-32 z-10 overflow-hidden rounded-[1.7rem] border border-white/20 bg-black/45 backdrop-blur-sm">
               <button
                 type="button"
                 className="flex h-14 w-14 items-center justify-center border-b border-white/15 text-white/95"
@@ -1425,7 +1468,7 @@ export default function CameraLandingPage() {
 
             <div className="absolute inset-x-0 bottom-0 z-10 px-4 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
               <div className="mx-auto max-w-sm">
-                <div className="mb-3 grid grid-cols-3 items-center gap-2">
+                <div className="mb-3 grid grid-cols-[auto_1fr_auto] items-center gap-2">
                   <div className="flex justify-start">
                     <button
                       type="button"
@@ -1445,7 +1488,7 @@ export default function CameraLandingPage() {
                     </button>
                   </div>
 
-                  <div className="flex items-center rounded-full border border-white/25 bg-black/45 p-1">
+                  <div className="mx-auto flex w-fit items-center rounded-full border border-white/25 bg-black/45 p-1">
                     {zoomOptions.map((zoom) => (
                       <button
                         key={zoom}
@@ -1485,10 +1528,10 @@ export default function CameraLandingPage() {
                   </div>
                 </div>
 
-                <div className="rounded-[2rem] border border-white/20 bg-black/65 px-3 py-3 backdrop-blur-md">
+                <div className="rounded-[2rem] bg-black/65 px-2.5 py-2.5 backdrop-blur-md">
                   <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3">
-                    <div className="flex min-w-[7.75rem] items-center justify-start gap-2 pr-2">
-                      <p className="text-[4.35rem] font-black italic leading-[0.8] text-white tabular-nums">
+                    <div className="flex min-w-[8.5rem] items-center justify-start gap-2 pl-1 pr-2">
+                      <p className="text-[4rem] font-black italic leading-[0.82] text-white tabular-nums">
                         {usage.shotsLimit > 0 ? (
                           <RollingShotsValue value={effectiveShotsLeft ?? 0} />
                         ) : (
@@ -1502,7 +1545,7 @@ export default function CameraLandingPage() {
 
                     <button
                       type="button"
-                      className="flex h-24 w-24 items-center justify-center rounded-full border-[4px] border-[#8a90ff] bg-white/10 shadow-[0_0_0_2px_rgba(255,255,255,0.35)_inset] disabled:opacity-40"
+                      className="flex h-[5.45rem] w-[5.45rem] items-center justify-center rounded-full border-[3px] border-[#8a90ff] bg-white/10 shadow-[0_0_0_1.5px_rgba(255,255,255,0.35)_inset] disabled:opacity-40"
                       onClick={() => void captureShot()}
                       disabled={
                         !cameraOpen ||
@@ -1511,10 +1554,10 @@ export default function CameraLandingPage() {
                       }
                       aria-label="Capture shot"
                     >
-                      <span className="h-16 w-16 rounded-full bg-white" />
+                      <span className="h-[4.8rem] w-[4.8rem] rounded-full bg-white" />
                     </button>
 
-                    <div className="flex min-w-[7.5rem] justify-end">
+                    <div className="flex min-w-[7.5rem] justify-end pr-1">
                       <button
                         type="button"
                         className="relative h-20 w-20 shrink-0 overflow-hidden rounded-2xl border border-white/25 bg-black/35 shadow-xl"
@@ -1598,7 +1641,7 @@ export default function CameraLandingPage() {
                         className="rounded-full border border-white/25 bg-white/20 px-4 py-2 text-sm font-semibold text-white"
                         onClick={() => {
                           setShowGallerySheet(false);
-                          setShowFallbackUpload(true);
+                          openUploadPicker();
                         }}
                       >
                         Add From Files
@@ -1872,40 +1915,15 @@ export default function CameraLandingPage() {
             ) : null}
 
             <canvas ref={canvasRef} className="hidden" />
+            <input
+              ref={uploadPickerRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={onUploadPickerChange}
+            />
           </section>
-
-          {showFallbackUpload ? (
-            <section className="mt-3 rounded-2xl border border-white/15 bg-white/5 p-3">
-              <form onSubmit={onUpload} className="space-y-3">
-                <label className="flex flex-col gap-1 text-xs text-white/75">
-                  <span>Name (optional)</span>
-                  <input
-                    className="rounded-lg border border-white/20 bg-black/30 px-3 py-2 text-sm text-white"
-                    value={uploaderName}
-                    onChange={(event) => setUploaderName(event.target.value)}
-                    maxLength={120}
-                  />
-                </label>
-                <label className="flex flex-col gap-1 text-xs text-white/75">
-                  <span>Upload fallback (from gallery/files)</span>
-                  <input
-                    className="rounded-lg border border-white/20 bg-black/30 px-3 py-2 text-sm text-white"
-                    type="file"
-                    accept="image/*"
-                    capture="environment"
-                    onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
-                  />
-                </label>
-                <button
-                  type="submit"
-                  className="w-full rounded-full bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-black disabled:opacity-40"
-                  disabled={!selectedFile || !canCaptureMoreShots}
-                >
-                  Add To My Shots
-                </button>
-              </form>
-            </section>
-          ) : null}
 
         </div>
       )}
