@@ -160,6 +160,8 @@ export default function CameraLandingPage() {
   const [localShots, setLocalShots] = useState<LocalShot[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadedShotsCount, setUploadedShotsCount] = useState(0);
+  const [uploadBatchTotal, setUploadBatchTotal] = useState(0);
+  const [uploadBatchDone, setUploadBatchDone] = useState(0);
   const [showStartNotice, setShowStartNotice] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [error, setError] = useState("");
@@ -188,6 +190,8 @@ export default function CameraLandingPage() {
       : null;
   const canCaptureMoreShots =
     usage.shotsLimit <= 0 || effectiveShotsLeft === null || effectiveShotsLeft > 0;
+  const uploadBatchPercent =
+    uploadBatchTotal > 0 ? Math.round((uploadBatchDone / uploadBatchTotal) * 100) : 0;
   const showLandingFirst = settings.cameraLandingEnabled;
   const showLandingScreen = showLandingFirst && !started;
   const shareableCameraUrl = useMemo(() => {
@@ -474,6 +478,7 @@ export default function CameraLandingPage() {
       setFeedback("Select at least one shot to upload.");
       return;
     }
+    const targetCount = selectedForUploadCount;
 
     setLocalShots((current) =>
       current.map((shot) =>
@@ -482,9 +487,11 @@ export default function CameraLandingPage() {
           : shot,
       ),
     );
+    setUploadBatchTotal(targetCount);
+    setUploadBatchDone(0);
     setFeedback(
-      `Uploading ${selectedForUploadCount} selected shot${
-        selectedForUploadCount === 1 ? "" : "s"
+      `Uploading ${targetCount} selected shot${
+        targetCount === 1 ? "" : "s"
       } in background. Keep this app open.`,
     );
   }
@@ -517,6 +524,7 @@ export default function CameraLandingPage() {
           return current.filter((shot) => shot.id !== nextId);
         });
         setUploadedShotsCount((current) => current + 1);
+        setUploadBatchDone((current) => current + 1);
       } else {
         setLocalShots((current) =>
           current.map((shot) =>
@@ -560,7 +568,11 @@ export default function CameraLandingPage() {
       return;
     }
 
-    const canUseTorchFlash = Boolean(torchSupported && track);
+    const canUseTorchFlash = Boolean(
+      flashEnabled && torchSupported && track && cameraFacing === "environment",
+    );
+    let torchEnabled = false;
+
     if (flashEnabled) {
       setFlashPulse(true);
       if (canUseTorchFlash && track) {
@@ -568,18 +580,28 @@ export default function CameraLandingPage() {
           await track.applyConstraints({
             advanced: [{ torch: true } as MediaTrackConstraintSet],
           });
-          await new Promise((resolve) => window.setTimeout(resolve, 90));
+          torchEnabled = true;
+          await new Promise((resolve) => window.setTimeout(resolve, 110));
         } catch {
-          // Ignore torch failures and keep software flash pulse only.
+          // Hardware torch may fail on some browsers/devices; continue with software flash.
+          setTorchSupported(false);
+          torchEnabled = false;
+          await new Promise((resolve) => window.setTimeout(resolve, 80));
         }
       } else {
-        await new Promise((resolve) => window.setTimeout(resolve, 70));
+        await new Promise((resolve) => window.setTimeout(resolve, 80));
       }
     }
 
+    if (flashEnabled && !torchEnabled) {
+      context.filter = "brightness(1.16) contrast(1.06)";
+    } else {
+      context.filter = "none";
+    }
     context.drawImage(video, 0, 0, width, height);
+    context.filter = "none";
 
-    if (flashEnabled && canUseTorchFlash && track) {
+    if (torchEnabled && track) {
       try {
         await track.applyConstraints({
           advanced: [{ torch: false } as MediaTrackConstraintSet],
@@ -589,7 +611,7 @@ export default function CameraLandingPage() {
       }
     }
     if (flashEnabled) {
-      window.setTimeout(() => setFlashPulse(false), 120);
+      window.setTimeout(() => setFlashPulse(false), 150);
     }
 
     const blob = await new Promise<Blob | null>((resolve) => {
@@ -1171,8 +1193,8 @@ export default function CameraLandingPage() {
             </div>
             <div className="pointer-events-none absolute inset-x-0 top-20 z-10 px-6 text-center">
               <p className="text-[11px] text-white/80">
-                Host shot limit: {usage.shotsLimit > 0 ? usage.shotsLimit : "Unlimited"} •
-                Captured: {capturedShotsCount}
+                Host shot limit: {usage.shotsLimit > 0 ? usage.shotsLimit : "Unlimited"} | Captured:{" "}
+                {capturedShotsCount}
               </p>
               {feedback ? <p className="mt-1 text-xs text-amber-200">{feedback}</p> : null}
               {pendingUploads > 0 ? (
@@ -1184,6 +1206,19 @@ export default function CameraLandingPage() {
                 <p className="mt-1 text-xs text-emerald-200">
                   All queued shots uploaded ({uploadedShotsCount} total).
                 </p>
+              ) : null}
+              {uploadBatchTotal > 0 ? (
+                <div className="mx-auto mt-1 w-full max-w-xs">
+                  <div className="h-1.5 overflow-hidden rounded-full bg-white/20">
+                    <div
+                      className="h-full rounded-full bg-emerald-300 transition-all duration-300"
+                      style={{ width: `${Math.max(0, Math.min(100, uploadBatchPercent))}%` }}
+                    />
+                  </div>
+                  <p className="mt-1 text-[10px] text-emerald-200">
+                    Uploaded {uploadBatchDone}/{uploadBatchTotal}
+                  </p>
+                </div>
               ) : null}
               {unsentShotsCount > 0 ? (
                 <p className="mt-1 text-xs text-white/80">
@@ -1792,5 +1827,6 @@ export default function CameraLandingPage() {
     </main>
   );
 }
+
 
 
