@@ -137,6 +137,7 @@ export default function CameraLandingPage() {
   const [cameraPermissionFailed, setCameraPermissionFailed] = useState(false);
   const [showFallbackUpload, setShowFallbackUpload] = useState(false);
   const [showGallerySheet, setShowGallerySheet] = useState(false);
+  const [showGalleryLockNotice, setShowGalleryLockNotice] = useState(true);
   const [galleryFilterMode, setGalleryFilterMode] = useState<GalleryFilterMode>("all");
   const [selectedCapturer, setSelectedCapturer] = useState("");
   const [downloadingGallery, setDownloadingGallery] = useState(false);
@@ -1427,7 +1428,10 @@ export default function CameraLandingPage() {
                       <button
                         type="button"
                         className="h-16 w-16 overflow-hidden rounded-xl border border-white/40 bg-black/45 shadow-xl"
-                        onClick={() => setShowGallerySheet(true)}
+                        onClick={() => {
+                          setShowGallerySheet(true);
+                          setShowGalleryLockNotice(true);
+                        }}
                         aria-label="Open gallery"
                       >
                         {previewUrl ? (
@@ -1469,7 +1473,10 @@ export default function CameraLandingPage() {
                     <button
                       type="button"
                       className="rounded-full border border-white/30 bg-black/40 px-3 py-1 text-xs text-white"
-                      onClick={() => setShowGallerySheet(false)}
+                      onClick={() => {
+                        setShowGallerySheet(false);
+                        setShowGalleryLockNotice(true);
+                      }}
                     >
                       Back
                     </button>
@@ -1489,7 +1496,15 @@ export default function CameraLandingPage() {
                     {galleryUnlockMessage ? (
                       <p className="mt-2 text-xs text-white/75">{galleryUnlockMessage}</p>
                     ) : null}
-                    <div className="mt-3 flex gap-2">
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        className="rounded-full border border-emerald-300/40 bg-emerald-300/20 px-4 py-2 text-sm font-semibold text-emerald-100 disabled:opacity-40"
+                        onClick={() => queueSelectedShotsForUpload()}
+                        disabled={selectedForUploadCount < 1}
+                      >
+                        Upload Selected ({selectedForUploadCount})
+                      </button>
                       <button
                         type="button"
                         className="rounded-full border border-white/25 bg-white/20 px-4 py-2 text-sm font-semibold text-white"
@@ -1498,7 +1513,7 @@ export default function CameraLandingPage() {
                           setShowFallbackUpload(true);
                         }}
                       >
-                        Upload
+                        Add From Files
                       </button>
                       <button
                         type="button"
@@ -1674,14 +1689,26 @@ export default function CameraLandingPage() {
                   )}
                 </div>
 
-                {isGalleryLockedForViewer ? (
-                  <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-6">
-                    <div className="rounded-2xl border border-white/20 bg-black/75 px-4 py-3 text-center">
-                      <p className="text-sm font-semibold text-white">Gallery is locked</p>
-                      <p className="mt-1 text-xs text-white/75">
-                        Other guests&apos; shots stay blurred until admin unlock time. Your own
-                        shots remain clear.
-                      </p>
+                {isGalleryLockedForViewer && showGalleryLockNotice ? (
+                  <div className="absolute inset-x-4 top-20 z-50">
+                    <div className="rounded-2xl border border-white/20 bg-black/75 px-4 py-3 backdrop-blur-sm">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-white">Gallery is locked</p>
+                          <p className="mt-1 text-xs text-white/75">
+                            Other guests&apos; shots stay blurred until admin unlock time. Your own
+                            shots remain clear.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          className="rounded-full border border-white/25 bg-white/10 px-2 py-0.5 text-xs text-white"
+                          onClick={() => setShowGalleryLockNotice(false)}
+                          aria-label="Close gallery lock notice"
+                        >
+                          Close
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ) : null}
