@@ -33,6 +33,10 @@ type CameraPhotoItem = {
 };
 
 const ADMIN_SESSION_KEY = "rj_admin_session_v1";
+const COVER_UPLOAD_LIMIT_BYTES = 4 * 1024 * 1024;
+const COVER_UPLOAD_HARD_LIMIT_BYTES = 16 * 1024 * 1024;
+const COVER_UPLOAD_MAX_DIMENSION = 2048;
+const COVER_JPEG_QUALITIES = [0.88, 0.8, 0.72, 0.64] as const;
 
 function readStoredAdminSession(): string | null {
   try {
@@ -122,6 +126,90 @@ async function fetchJsonWithRetry(
   throw lastError ?? new Error("Request failed after retries.");
 }
 
+function fileNameWithoutExtension(fileName: string) {
+  const trimmed = fileName.trim();
+  if (!trimmed) return "landing-cover";
+  return trimmed.replace(/\.[^.]+$/, "") || "landing-cover";
+}
+
+function blobToFile(blob: Blob, fileName: string, type: string) {
+  return new File([blob], fileName, {
+    type,
+    lastModified: Date.now(),
+  });
+}
+
+function loadImageElement(file: File) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error("Unable to read selected image."));
+    };
+    image.src = objectUrl;
+  });
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality?: number) {
+  return new Promise<Blob | null>((resolve) => {
+    canvas.toBlob((blob) => resolve(blob), type, quality);
+  });
+}
+
+async function prepareCoverUploadFile(file: File) {
+  if (file.size <= COVER_UPLOAD_LIMIT_BYTES) return file;
+  if (file.size > COVER_UPLOAD_HARD_LIMIT_BYTES) {
+    throw new Error("Selected image is too large. Please choose an image below 16 MB.");
+  }
+
+  const image = await loadImageElement(file);
+  const longestSide = Math.max(image.naturalWidth, image.naturalHeight);
+  const scale =
+    longestSide > COVER_UPLOAD_MAX_DIMENSION
+      ? COVER_UPLOAD_MAX_DIMENSION / longestSide
+      : 1;
+
+  const targetWidth = Math.max(1, Math.round(image.naturalWidth * scale));
+  const targetHeight = Math.max(1, Math.round(image.naturalHeight * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = targetWidth;
+  canvas.height = targetHeight;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("Unable to process selected image.");
+  }
+
+  context.drawImage(image, 0, 0, targetWidth, targetHeight);
+  const safeName = fileNameWithoutExtension(file.name);
+  let bestBlob: Blob | null = null;
+
+  for (const quality of COVER_JPEG_QUALITIES) {
+    const blob = await canvasToBlob(canvas, "image/jpeg", quality);
+    if (!blob) continue;
+    bestBlob = blob;
+    if (blob.size <= COVER_UPLOAD_LIMIT_BYTES) {
+      break;
+    }
+  }
+
+  if (!bestBlob) {
+    throw new Error("Unable to process selected image.");
+  }
+
+  if (bestBlob.size > COVER_UPLOAD_LIMIT_BYTES) {
+    throw new Error(
+      "Image is still too large for Vercel upload limit. Choose a smaller image.",
+    );
+  }
+
+  return blobToFile(bestBlob, `${safeName}.jpg`, "image/jpeg");
+}
+
 export default function CameraAdminPage() {
   const [token, setToken] = useState("");
   const [connected, setConnected] = useState(false);
@@ -129,6 +217,7 @@ export default function CameraAdminPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [coverUploading, setCoverUploading] = useState(false);
+  const [coverPreviewObjectUrl, setCoverPreviewObjectUrl] = useState("");
   const [cameraActionLoadingId, setCameraActionLoadingId] = useState("");
   const [qrEventId, setQrEventId] = useState("RJ2026");
   const [qrTableCode, setQrTableCode] = useState("");
@@ -170,6 +259,15 @@ export default function CameraAdminPage() {
     () => cameraPhotos.filter((photo) => photo.status === "rejected").length,
     [cameraPhotos],
   );
+  const landingCoverPreviewSrc = coverPreviewObjectUrl || settings.cameraCoverImageUrl;
+
+  useEffect(() => {
+    return () => {
+      if (coverPreviewObjectUrl.startsWith("blob:")) {
+        URL.revokeObjectURL(coverPreviewObjectUrl);
+      }
+    };
+  }, [coverPreviewObjectUrl]);
 
   const loadCameraData = useCallback(
     async (adminToken: string, options?: { silent?: boolean }) => {
@@ -443,10 +541,19 @@ export default function CameraAdminPage() {
       return;
     }
 
+    const localPreviewUrl = URL.createObjectURL(file);
+    setCoverPreviewObjectUrl((current) => {
+      if (current.startsWith("blob:")) {
+        URL.revokeObjectURL(current);
+      }
+      return localPreviewUrl;
+    });
+
     setCoverUploading(true);
     try {
+      const preparedFile = await prepareCoverUploadFile(file);
       const form = new FormData();
-      form.set("file", file, file.name);
+      form.set("file", preparedFile, preparedFile.name);
 
       const { response, payload, attempts } = await fetchJsonWithRetry(
         "/api/admin/camera/cover",
@@ -464,12 +571,22 @@ export default function CameraAdminPage() {
       const uploadedUrl = (cover.url as string | undefined) ?? "";
 
       if (!response.ok || !uploadedUrl) {
+        const payloadEmpty = !parsed || Object.keys(parsed).length === 0;
+        if (response.status === 413) {
+          toast.error("Upload failed", {
+            description:
+              "Image is too large for Vercel upload limit. Please use a smaller image.",
+          });
+          return;
+        }
         const details = typeof parsed.details === "string" ? ` (${parsed.details})` : "";
         const hint = typeof parsed.hint === "string" ? ` ${parsed.hint}` : "";
         const message =
           typeof parsed.error === "string"
             ? parsed.error
-            : "Unable to upload cover image.";
+            : payloadEmpty
+              ? `Unable to upload cover image. HTTP ${response.status}.`
+              : "Unable to upload cover image.";
         toast.error("Upload failed", {
           description: `${message}${details}${hint}`,
         });
@@ -480,15 +597,20 @@ export default function CameraAdminPage() {
         ...current,
         cameraCoverImageUrl: uploadedUrl,
       }));
+      setCoverPreviewObjectUrl("");
 
       const description =
         attempts > 1
           ? `Cover uploaded after ${attempts} attempts. Click Save Camera Settings to apply.`
           : "Cover uploaded. Click Save Camera Settings to apply.";
       toast.success("Cover ready", { description });
-    } catch {
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Unable to upload cover image right now.";
       toast.error("Network error", {
-        description: "Unable to upload cover image right now.",
+        description: message,
       });
     } finally {
       setCoverUploading(false);
@@ -894,13 +1016,22 @@ export default function CameraAdminPage() {
                     <button
                       type="button"
                       className="rounded-md border border-[var(--info-border)] bg-[var(--surface-2)] px-3 py-1.5 text-xs disabled:opacity-50"
-                      onClick={() =>
+                      onClick={() => {
+                        setCoverPreviewObjectUrl((current) => {
+                          if (current.startsWith("blob:")) {
+                            URL.revokeObjectURL(current);
+                          }
+                          return "";
+                        });
                         setSettings((current) => ({
                           ...current,
                           cameraCoverImageUrl: "",
-                        }))
+                        }));
+                      }}
+                      disabled={
+                        coverUploading ||
+                        (!settings.cameraCoverImageUrl && !coverPreviewObjectUrl)
                       }
-                      disabled={coverUploading || !settings.cameraCoverImageUrl}
                     >
                       Remove Cover
                     </button>
@@ -914,12 +1045,18 @@ export default function CameraAdminPage() {
                     className="rounded-lg border border-[var(--info-border)] bg-[var(--surface-2)] px-3 py-2 text-xs text-[var(--ink-soft)]"
                     value={settings.cameraCoverImageUrl}
                     placeholder="No cover image uploaded yet."
-                    onChange={(event) =>
+                    onChange={(event) => {
+                      setCoverPreviewObjectUrl((current) => {
+                        if (current.startsWith("blob:")) {
+                          URL.revokeObjectURL(current);
+                        }
+                        return "";
+                      });
                       setSettings((current) => ({
                         ...current,
                         cameraCoverImageUrl: event.target.value,
-                      }))
-                    }
+                      }));
+                    }}
                   />
                   <div className="rounded-xl border border-[var(--info-border)] bg-[var(--surface-2)] p-3">
                     <div className="flex items-center justify-between gap-2">
@@ -932,9 +1069,9 @@ export default function CameraAdminPage() {
                     </div>
                     <div className="mx-auto mt-3 w-full max-w-[320px]">
                       <div className="relative aspect-[9/16] overflow-hidden rounded-[1.5rem] border border-white/20 bg-black">
-                        {settings.cameraCoverImageUrl ? (
+                        {landingCoverPreviewSrc ? (
                           <img
-                            src={settings.cameraCoverImageUrl}
+                            src={landingCoverPreviewSrc}
                             alt="Landing cover preview"
                             className="absolute inset-0 h-full w-full object-cover object-[50%_22%]"
                           />
