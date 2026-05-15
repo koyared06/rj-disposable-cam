@@ -105,6 +105,19 @@ function resolveGalleryUnlockMessage(settings: CameraSessionSettings) {
   return `Gallery photos unlock on ${formatted}.`;
 }
 
+function trackSupportsTorch(track: MediaStreamTrack | null | undefined) {
+  if (!track) return false;
+  const withCaps = track as MediaStreamTrack & {
+    getCapabilities?: () => unknown;
+    getSettings?: () => MediaTrackSettings;
+  };
+  const capabilities = (withCaps.getCapabilities?.() ?? {}) as Record<string, unknown>;
+  if (capabilities.torch === true) return true;
+  if ("torch" in capabilities) return true;
+  const settings = withCaps.getSettings?.();
+  return typeof settings?.torch === "boolean";
+}
+
 export default function CameraLandingPage() {
   const qrParams = useMemo(() => {
     if (typeof window === "undefined") {
@@ -568,29 +581,37 @@ export default function CameraLandingPage() {
       return;
     }
 
-    const canUseTorchFlash = Boolean(
-      flashEnabled && torchSupported && track && cameraFacing === "environment",
+    const canTryHardwareTorch = Boolean(
+      flashEnabled && track && cameraFacing === "environment",
     );
     let torchEnabled = false;
+    let useScreenFlashPulse = false;
 
     if (flashEnabled) {
-      setFlashPulse(true);
-      if (canUseTorchFlash && track) {
+      if (canTryHardwareTorch && track) {
         try {
           await track.applyConstraints({
             advanced: [{ torch: true } as MediaTrackConstraintSet],
           });
           torchEnabled = true;
+          if (!torchSupported) {
+            setTorchSupported(true);
+          }
           await new Promise((resolve) => window.setTimeout(resolve, 110));
         } catch {
           // Hardware torch may fail on some browsers/devices; continue with software flash.
-          setTorchSupported(false);
           torchEnabled = false;
+          useScreenFlashPulse = true;
           await new Promise((resolve) => window.setTimeout(resolve, 80));
         }
       } else {
+        useScreenFlashPulse = true;
         await new Promise((resolve) => window.setTimeout(resolve, 80));
       }
+    }
+
+    if (useScreenFlashPulse) {
+      setFlashPulse(true);
     }
 
     if (flashEnabled && !torchEnabled) {
@@ -610,7 +631,7 @@ export default function CameraLandingPage() {
         // Ignore torch reset failures.
       }
     }
-    if (flashEnabled) {
+    if (useScreenFlashPulse) {
       window.setTimeout(() => setFlashPulse(false), 150);
     }
 
@@ -881,8 +902,7 @@ export default function CameraLandingPage() {
           }
         ).getCapabilities?.();
 
-        const torchCap = (capabilities as Record<string, unknown> | undefined)?.["torch"];
-        setTorchSupported(Boolean(torchCap));
+        setTorchSupported(trackSupportsTorch(track));
 
         const zoomCap = (capabilities as Record<string, unknown> | undefined)?.["zoom"] as
           | { min?: number; max?: number }
