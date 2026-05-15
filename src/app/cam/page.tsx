@@ -1273,17 +1273,15 @@ export default function CameraLandingPage() {
               </button>
             </div>
 
-            <div className="pointer-events-none absolute inset-x-0 top-20 z-10 px-12 text-center">
-              <p className="truncate text-[2rem] font-semibold tracking-tight text-white drop-shadow-lg">
+            <div className="pointer-events-none absolute inset-x-0 top-24 z-10 px-10 text-center">
+              <p className="truncate text-[2.9rem] font-semibold leading-none tracking-tight text-white drop-shadow-lg">
                 {settings.cameraEventTitle}
               </p>
-              <p className="truncate text-xs text-white/75 drop-shadow">{settings.cameraEventSubtitle}</p>
-            </div>
-            <div className="pointer-events-none absolute inset-x-0 top-[8.5rem] z-10 px-6 text-center">
-              <p className="text-[11px] text-white/80">
-                Host shot limit: {usage.shotsLimit > 0 ? usage.shotsLimit : "Unlimited"} | Captured:{" "}
-                {capturedShotsCount}
+              <p className="mt-1 truncate text-sm text-white/75 drop-shadow">
+                {settings.cameraEventSubtitle}
               </p>
+            </div>
+            <div className="pointer-events-none absolute inset-x-0 top-[11.6rem] z-10 px-6 text-center">
               {feedback ? <p className="mt-1 text-xs text-amber-200">{feedback}</p> : null}
             </div>
 
@@ -1487,24 +1485,24 @@ export default function CameraLandingPage() {
                   </div>
                 </div>
 
-                <div className="rounded-3xl border border-white/20 bg-black/55 px-3 py-3 backdrop-blur-sm">
+                <div className="rounded-[2rem] border border-white/20 bg-black/65 px-3 py-3 backdrop-blur-md">
                   <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3">
                     <div className="flex min-w-[7.5rem] items-center justify-start gap-2 pr-2">
-                      <p className="text-5xl font-extrabold leading-[0.95] text-white tabular-nums">
+                      <p className="text-[4.35rem] font-black italic leading-[0.8] text-white tabular-nums">
                         {usage.shotsLimit > 0 ? (
                           <RollingShotsValue value={effectiveShotsLeft ?? 0} />
                         ) : (
                           "∞"
                         )}
                       </p>
-                      <p className="text-[8px] font-semibold uppercase leading-[1.15] tracking-[0.18em] text-white/85">
+                      <p className="text-[11px] font-black uppercase italic leading-[1.08] tracking-[0.08em] text-white/90">
                         Shots Remaining
                       </p>
                     </div>
 
                     <button
                       type="button"
-                      className="flex h-20 w-20 items-center justify-center rounded-full border-4 border-white bg-white/20 disabled:opacity-40"
+                      className="flex h-24 w-24 items-center justify-center rounded-full border-[4px] border-[#8a90ff] bg-white/10 shadow-[0_0_0_2px_rgba(255,255,255,0.35)_inset] disabled:opacity-40"
                       onClick={() => void captureShot()}
                       disabled={
                         !cameraOpen ||
@@ -1513,13 +1511,13 @@ export default function CameraLandingPage() {
                       }
                       aria-label="Capture shot"
                     >
-                      <span className="h-14 w-14 rounded-full bg-white" />
+                      <span className="h-16 w-16 rounded-full bg-white" />
                     </button>
 
                     <div className="flex min-w-[7.5rem] justify-end">
                       <button
                         type="button"
-                        className="h-14 w-14 shrink-0 overflow-hidden rounded-xl border border-white/40 bg-black/45 shadow-xl"
+                        className="relative h-20 w-20 shrink-0 overflow-hidden rounded-2xl border border-white/25 bg-black/35 shadow-xl"
                         onClick={() => {
                           setShowGallerySheet(true);
                           setShowGalleryLockNotice(true);
@@ -1535,9 +1533,7 @@ export default function CameraLandingPage() {
                             }`}
                           />
                         ) : (
-                          <span className="inline-flex h-full w-full items-center justify-center text-[10px] text-white/75">
-                            Gallery
-                          </span>
+                          <span className="relative inline-flex h-full w-full items-center justify-center"><span className="absolute h-10 w-8 translate-x-2 -translate-y-1 rotate-[12deg] rounded-md border border-white/25 bg-white/10" /><span className="absolute h-10 w-8 -translate-x-2 translate-y-1 rotate-[-9deg] rounded-md border border-white/20 bg-white/5" /><span className="absolute h-10 w-8 rounded-md border border-white/30 bg-white/15" /></span>
                         )}
                       </button>
                     </div>
@@ -1667,14 +1663,6 @@ export default function CameraLandingPage() {
                           }
                         >
                           Clear Selection
-                        </button>
-                        <button
-                          type="button"
-                          className="rounded-full border border-emerald-300/40 bg-emerald-300/20 px-3 py-1.5 text-xs font-semibold text-emerald-100 disabled:opacity-40"
-                          onClick={() => queueSelectedShotsForUpload()}
-                          disabled={selectedForUploadCount < 1}
-                        >
-                          Upload Selected ({selectedForUploadCount})
                         </button>
                         <button
                           type="button"
@@ -1924,6 +1912,7 @@ export default function CameraLandingPage() {
     </main>
   );
 }
+
 
 
 
