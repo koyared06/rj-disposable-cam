@@ -147,10 +147,14 @@ export default function CameraLandingPage() {
   const [guestNameError, setGuestNameError] = useState("");
   const [started, setStarted] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [uploadQueue, setUploadQueue] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [uploadedShotsCount, setUploadedShotsCount] = useState(0);
+  const [failedShotsCount, setFailedShotsCount] = useState(0);
+  const [showStartNotice, setShowStartNotice] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [error, setError] = useState("");
-  const [, setFeedback] = useState("");
+  const [feedback, setFeedback] = useState("");
   const [showQrSheet, setShowQrSheet] = useState(false);
   const [qrImageDataUrl, setQrImageDataUrl] = useState("");
   const [qrRendering, setQrRendering] = useState(false);
@@ -159,8 +163,13 @@ export default function CameraLandingPage() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
+  const pendingUploads = uploadQueue.length + (uploading ? 1 : 0);
+  const effectiveShotsLeft =
+    usage.shotsLimit > 0
+      ? Math.max(0, usage.shotsLimit - (usage.shotsUsed + pendingUploads))
+      : null;
   const canCaptureMoreShots =
-    usage.shotsLimit <= 0 || usage.shotsLeft === null || usage.shotsLeft > 0;
+    usage.shotsLimit <= 0 || effectiveShotsLeft === null || effectiveShotsLeft > 0;
   const showLandingFirst = settings.cameraLandingEnabled;
   const showLandingScreen = showLandingFirst && !started;
   const shareableCameraUrl = useMemo(() => {
@@ -347,13 +356,7 @@ export default function CameraLandingPage() {
     await startCamera(nextFacing);
   }, [cameraFacing, startCamera]);
 
-  async function uploadPhoto(fileToUpload: File) {
-    if (!canCaptureMoreShots) {
-      setFeedback("Shot limit reached.");
-      return;
-    }
-
-    setUploading(true);
+  const uploadPhotoNow = useCallback(async (fileToUpload: File) => {
     try {
       const formData = new FormData();
       formData.set("eventId", eventId);
@@ -371,42 +374,76 @@ export default function CameraLandingPage() {
         const hint = typeof payload.hint === "string" && payload.hint ? ` ${payload.hint}` : "";
         setFeedback(`${payload.error ?? "Unable to upload."}${hint}`);
         if (payload.usage) {
-          setUsage({
-            shotsUsed: Number(payload.usage.shotsUsed ?? usage.shotsUsed),
-            shotsLimit: Number(payload.usage.shotsLimit ?? usage.shotsLimit),
+          setUsage((current) => ({
+            shotsUsed: Number(payload.usage.shotsUsed ?? current.shotsUsed),
+            shotsLimit: Number(payload.usage.shotsLimit ?? current.shotsLimit),
             shotsLeft:
               typeof payload.usage.shotsLeft === "number" || payload.usage.shotsLeft === null
                 ? payload.usage.shotsLeft
-                : usage.shotsLeft,
-          });
+                : current.shotsLeft,
+          }));
         }
-        return;
+        return false;
       }
 
       if (payload.usage) {
-        setUsage({
-          shotsUsed: Number(payload.usage.shotsUsed ?? usage.shotsUsed),
-          shotsLimit: Number(payload.usage.shotsLimit ?? usage.shotsLimit),
+        setUsage((current) => ({
+          shotsUsed: Number(payload.usage.shotsUsed ?? current.shotsUsed),
+          shotsLimit: Number(payload.usage.shotsLimit ?? current.shotsLimit),
           shotsLeft:
             typeof payload.usage.shotsLeft === "number" || payload.usage.shotsLeft === null
               ? payload.usage.shotsLeft
-              : usage.shotsLeft,
-        });
+              : current.shotsLeft,
+        }));
       }
 
       setSelectedFile(fileToUpload);
-      setFeedback(
-        payload.photo?.status === "pending"
-          ? "Shot saved. Waiting for approval."
-          : "Shot saved.",
-      );
+      setFeedback("Shot uploaded.");
       await loadGallery();
+      return true;
     } catch {
       setFeedback("Network error uploading photo.");
-    } finally {
-      setUploading(false);
+      return false;
     }
+  }, [cameraToken, deviceId, eventId, loadGallery, normalizedGuestName]);
+
+  function enqueuePhotoUpload(fileToUpload: File) {
+    if (!canCaptureMoreShots) {
+      setFeedback("Shot limit reached.");
+      return false;
+    }
+
+    setUploadQueue((current) => [...current, fileToUpload]);
+    setFeedback("Shot queued. Keep this app open while uploads complete.");
+    return true;
   }
+
+  useEffect(() => {
+    if (uploading || uploadQueue.length === 0) return;
+
+    let cancelled = false;
+    const nextFile = uploadQueue[0];
+
+    const processNext = async () => {
+      setUploading(true);
+      const ok = await uploadPhotoNow(nextFile);
+      if (cancelled) return;
+
+      setUploadQueue((current) => current.slice(1));
+      if (ok) {
+        setUploadedShotsCount((current) => current + 1);
+      } else {
+        setFailedShotsCount((current) => current + 1);
+      }
+      setUploading(false);
+    };
+
+    void processNext();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [uploadQueue, uploading, uploadPhotoNow]);
 
   async function captureShot() {
     if (!ensureGuestName()) return;
@@ -478,7 +515,7 @@ export default function CameraLandingPage() {
       type: "image/jpeg",
     });
     setSelectedFile(fileToUpload);
-    await uploadPhoto(fileToUpload);
+    enqueuePhotoUpload(fileToUpload);
   }
 
   async function onUpload(event: FormEvent<HTMLFormElement>) {
@@ -489,7 +526,9 @@ export default function CameraLandingPage() {
       setFeedback("Please capture or pick a photo first.");
       return;
     }
-    await uploadPhoto(selectedFile);
+    if (enqueuePhotoUpload(selectedFile)) {
+      setSelectedFile(null);
+    }
   }
 
   async function openQrSheet() {
@@ -656,6 +695,18 @@ export default function CameraLandingPage() {
     }, 0);
     return () => window.clearTimeout(timer);
   }, [cameraToken, deviceId, error, eventId, loadGallery, loading]);
+
+  useEffect(() => {
+    if (pendingUploads < 1) return;
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [pendingUploads]);
 
   useEffect(
     () => () => {
@@ -920,15 +971,47 @@ export default function CameraLandingPage() {
             <button
               type="button"
               className="mt-5 w-full rounded-full bg-white px-5 py-3 text-sm font-semibold uppercase tracking-[0.12em] text-black"
-              onClick={() => {
-                setStarted(true);
-                setKeepCameraActive(true);
-                void startCamera();
-              }}
+              onClick={() => setShowStartNotice(true)}
             >
               {settings.cameraStartButtonLabel}
             </button>
           </div>
+
+          {showStartNotice ? (
+            <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/60 px-5">
+              <div className="w-full max-w-sm rounded-2xl border border-white/25 bg-black/85 p-4 backdrop-blur-sm">
+                <p className="text-base font-semibold text-white">Before you continue</p>
+                <p className="mt-2 text-sm leading-relaxed text-white/80">
+                  Please use a strong internet connection to make sure your shots upload
+                  successfully.
+                </p>
+                <p className="mt-2 text-xs leading-relaxed text-amber-200/90">
+                  If you close this app while uploads are pending, unsent shots may be lost.
+                </p>
+                <div className="mt-4 grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    className="rounded-lg border border-white/25 bg-white/10 px-3 py-2 text-sm text-white"
+                    onClick={() => setShowStartNotice(false)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-lg bg-white px-3 py-2 text-sm font-semibold text-black"
+                    onClick={() => {
+                      setShowStartNotice(false);
+                      setStarted(true);
+                      setKeepCameraActive(true);
+                      void startCamera();
+                    }}
+                  >
+                    I Understand
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
         </section>
       ) : (
         <div className="mx-auto flex h-[100dvh] w-full max-w-md flex-col overflow-hidden">
@@ -985,6 +1068,28 @@ export default function CameraLandingPage() {
                 {settings.cameraEventTitle}
               </p>
               <p className="truncate text-xs text-white/75 drop-shadow">{settings.cameraEventSubtitle}</p>
+            </div>
+            <div className="pointer-events-none absolute inset-x-0 top-20 z-10 px-6 text-center">
+              <p className="text-[11px] text-white/80">
+                Host shot limit: {usage.shotsLimit > 0 ? usage.shotsLimit : "Unlimited"}
+              </p>
+              {feedback ? <p className="mt-1 text-xs text-amber-200">{feedback}</p> : null}
+              {pendingUploads > 0 ? (
+                <p className="mt-1 text-xs text-rose-200">
+                  Uploading {pendingUploads} shot{pendingUploads === 1 ? "" : "s"} in background.
+                  Keep this app open.
+                </p>
+              ) : uploadedShotsCount > 0 ? (
+                <p className="mt-1 text-xs text-emerald-200">
+                  All queued shots uploaded ({uploadedShotsCount} total).
+                </p>
+              ) : null}
+              {failedShotsCount > 0 ? (
+                <p className="mt-1 text-xs text-rose-300">
+                  {failedShotsCount} shot{failedShotsCount === 1 ? "" : "s"} failed to upload.
+                  Check your connection and try again.
+                </p>
+              ) : null}
             </div>
 
             <div className="absolute right-3 top-1/2 z-10 flex -translate-y-1/2 flex-col gap-2">
@@ -1170,7 +1275,7 @@ export default function CameraLandingPage() {
                       type="button"
                       className="flex h-11 w-11 items-center justify-center rounded-full border border-white/35 bg-black/50 text-white disabled:opacity-40"
                       onClick={() => void switchCameraFacing()}
-                      disabled={!cameraOpen || uploading || cameraTransitioning}
+                      disabled={!cameraOpen || cameraTransitioning}
                       aria-label="Flip camera"
                     >
                       <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
@@ -1191,7 +1296,7 @@ export default function CameraLandingPage() {
                   <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-3">
                     <div className="flex min-w-0 items-end justify-start gap-2 pr-2">
                       <p className="text-4xl font-extrabold leading-none text-white">
-                        {usage.shotsLimit > 0 ? usage.shotsLeft ?? 0 : "Unlimited"}
+                        {usage.shotsLimit > 0 ? effectiveShotsLeft ?? 0 : "Unlimited"}
                       </p>
                       <p className="pb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/85">
                         Shots Remaining
@@ -1205,7 +1310,6 @@ export default function CameraLandingPage() {
                       disabled={
                         !cameraOpen ||
                         !canCaptureMoreShots ||
-                        uploading ||
                         cameraTransitioning
                       }
                       aria-label="Capture shot"
@@ -1427,9 +1531,9 @@ export default function CameraLandingPage() {
                 <button
                   type="submit"
                   className="w-full rounded-full bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-black disabled:opacity-40"
-                  disabled={uploading || !selectedFile || !canCaptureMoreShots}
+                  disabled={!selectedFile || !canCaptureMoreShots}
                 >
-                  {uploading ? "Uploading..." : "Upload Selected Photo"}
+                  {pendingUploads > 0 ? "Queue Upload" : "Upload Selected Photo"}
                 </button>
               </form>
             </section>
