@@ -1,0 +1,1444 @@
+"use client";
+
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import QRCode from "qrcode";
+
+type CameraSessionSettings = {
+  cameraEnabled: boolean;
+  cameraRequireApproval: boolean;
+  cameraGalleryUnlockDate: string;
+  cameraGalleryUnlockTime: string;
+  cameraMaxUploadMb: number;
+  cameraShotLimitPerInvite: number;
+  cameraLandingEnabled: boolean;
+  cameraEventTitle: string;
+  cameraEventSubtitle: string;
+  cameraCoverImageUrl: string;
+  cameraStartButtonLabel: string;
+};
+
+type CameraGalleryItem = {
+  id: string;
+  createdAt: string;
+  inviteCode: string;
+  uploaderName: string;
+  status: "pending" | "approved" | "hidden" | "rejected" | string;
+  isOwnPhoto: boolean;
+  visibilityAt: string;
+  imageUrl: string;
+};
+
+type CameraUsage = {
+  shotsUsed: number;
+  shotsLimit: number;
+  shotsLeft: number | null;
+};
+type CameraFacing = "environment" | "user";
+type GalleryFilterMode = "all" | "mine" | "capturer";
+
+const ADMIN_SESSION_KEY = "rj_admin_session_v1";
+
+const DEFAULT_SETTINGS: CameraSessionSettings = {
+  cameraEnabled: false,
+  cameraRequireApproval: true,
+  cameraGalleryUnlockDate: "",
+  cameraGalleryUnlockTime: "",
+  cameraMaxUploadMb: 3,
+  cameraShotLimitPerInvite: 27,
+  cameraLandingEnabled: true,
+  cameraEventTitle: "Guest Camera",
+  cameraEventSubtitle: "Capture moments from our celebration.",
+  cameraCoverImageUrl: "",
+  cameraStartButtonLabel: "Start Camera",
+};
+
+function makeDeviceStorageKey(eventId: string) {
+  return `rj_camera_device_${eventId}`;
+}
+
+function makeGuestNameStorageKey(eventId: string) {
+  return `rj_camera_guest_name_${eventId}`;
+}
+
+function readOrCreateDeviceId(eventId: string) {
+  const key = makeDeviceStorageKey(eventId);
+  const existing = window.localStorage.getItem(key);
+  if (existing) return existing;
+
+  const created =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  window.localStorage.setItem(key, created);
+  return created;
+}
+
+function resolveGalleryUnlockMessage(settings: CameraSessionSettings) {
+  const date = settings.cameraGalleryUnlockDate.trim();
+  const time = settings.cameraGalleryUnlockTime.trim();
+  if (!date) return "";
+
+  const iso = `${date}T${time || "00:00"}:00`;
+  const unlockAt = new Date(iso);
+  if (Number.isNaN(unlockAt.getTime())) return "";
+
+  const formatted = unlockAt.toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+
+  if (unlockAt.getTime() <= Date.now()) {
+    return `Gallery unlock is active since ${formatted}.`;
+  }
+  return `Gallery photos unlock on ${formatted}.`;
+}
+
+export default function CameraLandingPage() {
+  const qrParams = useMemo(() => {
+    if (typeof window === "undefined") {
+      return { eventId: "", cameraToken: "" };
+    }
+    const params = new URLSearchParams(window.location.search);
+    return {
+      eventId: (params.get("e") ?? "").trim(),
+      cameraToken: (params.get("t") ?? "").trim(),
+    };
+  }, []);
+  const eventId = qrParams.eventId;
+  const cameraToken = qrParams.cameraToken;
+  const [deviceId, setDeviceId] = useState("");
+  const [settings, setSettings] = useState<CameraSessionSettings>(DEFAULT_SETTINGS);
+  const [galleryItems, setGalleryItems] = useState<CameraGalleryItem[]>([]);
+  const [usage, setUsage] = useState<CameraUsage>({
+    shotsUsed: 0,
+    shotsLimit: 27,
+    shotsLeft: 27,
+  });
+  const [uploaderName, setUploaderName] = useState("");
+  const [guestNameDraft, setGuestNameDraft] = useState("");
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [showGuestNameModal, setShowGuestNameModal] = useState(false);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraFacing, setCameraFacing] = useState<CameraFacing>("environment");
+  const [cameraTransitioning, setCameraTransitioning] = useState(false);
+  const [keepCameraActive, setKeepCameraActive] = useState(true);
+  const [cameraPermissionFailed, setCameraPermissionFailed] = useState(false);
+  const [showFallbackUpload, setShowFallbackUpload] = useState(false);
+  const [showGallerySheet, setShowGallerySheet] = useState(false);
+  const [galleryFilterMode, setGalleryFilterMode] = useState<GalleryFilterMode>("all");
+  const [selectedCapturer, setSelectedCapturer] = useState("");
+  const [downloadingGallery, setDownloadingGallery] = useState(false);
+  const [torchSupported, setTorchSupported] = useState(false);
+  const [flashEnabled, setFlashEnabled] = useState(false);
+  const [flashPulse, setFlashPulse] = useState(false);
+  const [zoomOptions, setZoomOptions] = useState<number[]>([1]);
+  const [selectedZoom, setSelectedZoom] = useState(1);
+  const [adminToken] = useState(() => {
+    if (typeof window === "undefined") return "";
+    try {
+      return window.sessionStorage.getItem(ADMIN_SESSION_KEY)?.trim() ?? "";
+    } catch {
+      return "";
+    }
+  });
+  const [guestNameError, setGuestNameError] = useState("");
+  const [started, setStarted] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [sharing, setSharing] = useState(false);
+  const [error, setError] = useState("");
+  const [, setFeedback] = useState("");
+  const [showQrSheet, setShowQrSheet] = useState(false);
+  const [qrImageDataUrl, setQrImageDataUrl] = useState("");
+  const [qrRendering, setQrRendering] = useState(false);
+
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
+  const canCaptureMoreShots =
+    usage.shotsLimit <= 0 || usage.shotsLeft === null || usage.shotsLeft > 0;
+  const showLandingFirst = settings.cameraLandingEnabled;
+  const showLandingScreen = showLandingFirst && !started;
+  const shareableCameraUrl = useMemo(() => {
+    if (typeof window === "undefined") return "";
+    if (!eventId || !cameraToken) return "";
+    const base = window.location.origin;
+    const params = new URLSearchParams({ e: eventId, t: cameraToken });
+    return `${base}/cam?${params.toString()}`;
+  }, [cameraToken, eventId]);
+  const previewUrl = useMemo(
+    () => (selectedFile ? URL.createObjectURL(selectedFile) : ""),
+    [selectedFile],
+  );
+  const normalizedGuestName = uploaderName.trim();
+  const isAdminViewer = Boolean(adminToken.trim());
+
+  const stopCamera = useCallback((manualClose = false) => {
+    const stream = streamRef.current;
+    if (stream) {
+      stream.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    if (manualClose) {
+      setKeepCameraActive(false);
+    }
+    setCameraOpen(false);
+  }, []);
+
+  const returnToCameraLanding = useCallback(() => {
+    stopCamera(true);
+    setStarted(false);
+    setShowFallbackUpload(false);
+    setShowGallerySheet(false);
+    setShowQrSheet(false);
+  }, [stopCamera]);
+
+  const loadGallery = useCallback(async () => {
+    if (!eventId || !cameraToken || !deviceId) return;
+    try {
+      const params = new URLSearchParams({
+        e: eventId,
+        t: cameraToken,
+        device: deviceId,
+      });
+      const response = await fetch(`/api/camera/list?${params.toString()}`, {
+        headers: adminToken
+          ? {
+              "x-admin-token": adminToken,
+            }
+          : undefined,
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        setFeedback(payload.error ?? "Unable to load gallery.");
+        return;
+      }
+
+      setGalleryItems(Array.isArray(payload.items) ? payload.items : []);
+      if (payload.usage) {
+        setUsage({
+          shotsUsed: Number(payload.usage.shotsUsed ?? 0),
+          shotsLimit: Number(payload.usage.shotsLimit ?? settings.cameraShotLimitPerInvite),
+          shotsLeft:
+            typeof payload.usage.shotsLeft === "number" || payload.usage.shotsLeft === null
+              ? payload.usage.shotsLeft
+              : null,
+        });
+      }
+    } catch {
+      setFeedback("Unable to load gallery right now.");
+    }
+  }, [adminToken, cameraToken, deviceId, eventId, settings.cameraShotLimitPerInvite]);
+
+  const saveGuestName = useCallback(
+    (inputName: string) => {
+      const cleanName = inputName.trim().slice(0, 120);
+      if (!cleanName) {
+        setGuestNameError("Guest name is required.");
+        setFeedback("Please enter your name before taking a photo.");
+        return false;
+      }
+
+      setGuestNameError("");
+      setUploaderName(cleanName);
+      setGuestNameDraft(cleanName);
+      if (eventId) {
+        try {
+          window.localStorage.setItem(makeGuestNameStorageKey(eventId), cleanName);
+        } catch {
+          // Ignore localStorage write errors.
+        }
+      }
+      setShowGuestNameModal(false);
+      setFeedback("");
+      return true;
+    },
+    [eventId],
+  );
+
+  const ensureGuestName = useCallback(() => {
+    if (normalizedGuestName) return true;
+    setGuestNameDraft("");
+    setGuestNameError("Guest name is required.");
+    setShowGuestNameModal(true);
+    setFeedback("Please enter your name before taking a photo.");
+    return false;
+  }, [normalizedGuestName]);
+
+  const startCamera = useCallback(
+    async (preferredFacing: CameraFacing = cameraFacing) => {
+      if (!canCaptureMoreShots) {
+        setFeedback("Shot limit reached.");
+        return;
+      }
+
+      if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+        setFeedback("Camera is not supported in this browser. Use upload as fallback.");
+        return;
+      }
+
+      setCameraTransitioning(true);
+      const hadStream = Boolean(streamRef.current);
+      stopCamera(false);
+      if (hadStream) {
+        await new Promise((resolve) => window.setTimeout(resolve, 120));
+      }
+
+      const backupFacing: CameraFacing =
+        preferredFacing === "environment" ? "user" : "environment";
+      const cameraConstraints: MediaStreamConstraints[] = [
+        {
+          video: {
+            facingMode: { ideal: preferredFacing },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+          },
+          audio: false,
+        },
+        { video: { facingMode: preferredFacing }, audio: false },
+        { video: { facingMode: backupFacing }, audio: false },
+        { video: true, audio: false },
+      ];
+
+      try {
+        let stream: MediaStream | null = null;
+        for (const constraints of cameraConstraints) {
+          try {
+            stream = await navigator.mediaDevices.getUserMedia(constraints);
+            break;
+          } catch {
+            continue;
+          }
+        }
+
+        if (!stream) {
+          setCameraPermissionFailed(true);
+          setFeedback("Camera permission blocked or unavailable. Use upload as fallback.");
+          setCameraTransitioning(false);
+          return;
+        }
+
+        streamRef.current = stream;
+        setCameraPermissionFailed(false);
+        setKeepCameraActive(true);
+        setCameraFacing(preferredFacing);
+        setCameraOpen(true);
+        setFeedback("");
+      } catch {
+        setCameraPermissionFailed(true);
+        setFeedback("Camera permission blocked. Use upload as fallback.");
+      } finally {
+        setCameraTransitioning(false);
+      }
+    },
+    [cameraFacing, canCaptureMoreShots, stopCamera],
+  );
+
+  const switchCameraFacing = useCallback(async () => {
+    const nextFacing: CameraFacing =
+      cameraFacing === "environment" ? "user" : "environment";
+    await startCamera(nextFacing);
+  }, [cameraFacing, startCamera]);
+
+  async function uploadPhoto(fileToUpload: File) {
+    if (!canCaptureMoreShots) {
+      setFeedback("Shot limit reached.");
+      return;
+    }
+
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.set("eventId", eventId);
+      formData.set("cameraToken", cameraToken);
+      formData.set("deviceId", deviceId);
+      formData.set("uploaderName", normalizedGuestName || "Guest");
+      formData.set("file", fileToUpload, fileToUpload.name);
+
+      const response = await fetch("/api/camera/upload", {
+        method: "POST",
+        body: formData,
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        const hint = typeof payload.hint === "string" && payload.hint ? ` ${payload.hint}` : "";
+        setFeedback(`${payload.error ?? "Unable to upload."}${hint}`);
+        if (payload.usage) {
+          setUsage({
+            shotsUsed: Number(payload.usage.shotsUsed ?? usage.shotsUsed),
+            shotsLimit: Number(payload.usage.shotsLimit ?? usage.shotsLimit),
+            shotsLeft:
+              typeof payload.usage.shotsLeft === "number" || payload.usage.shotsLeft === null
+                ? payload.usage.shotsLeft
+                : usage.shotsLeft,
+          });
+        }
+        return;
+      }
+
+      if (payload.usage) {
+        setUsage({
+          shotsUsed: Number(payload.usage.shotsUsed ?? usage.shotsUsed),
+          shotsLimit: Number(payload.usage.shotsLimit ?? usage.shotsLimit),
+          shotsLeft:
+            typeof payload.usage.shotsLeft === "number" || payload.usage.shotsLeft === null
+              ? payload.usage.shotsLeft
+              : usage.shotsLeft,
+        });
+      }
+
+      setSelectedFile(fileToUpload);
+      setFeedback(
+        payload.photo?.status === "pending"
+          ? "Shot saved. Waiting for approval."
+          : "Shot saved.",
+      );
+      await loadGallery();
+    } catch {
+      setFeedback("Network error uploading photo.");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function captureShot() {
+    if (!ensureGuestName()) return;
+
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    const track = streamRef.current?.getVideoTracks?.()[0];
+    if (!video || !canvas || !cameraOpen) {
+      setFeedback("Camera is not ready.");
+      return;
+    }
+
+    const width = video.videoWidth || 0;
+    const height = video.videoHeight || 0;
+    if (width < 1 || height < 1) {
+      setFeedback("Unable to capture frame.");
+      return;
+    }
+
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      setFeedback("Unable to process camera frame.");
+      return;
+    }
+
+    const canUseTorchFlash = Boolean(torchSupported && track);
+    if (flashEnabled) {
+      setFlashPulse(true);
+      if (canUseTorchFlash && track) {
+        try {
+          await track.applyConstraints({
+            advanced: [{ torch: true } as MediaTrackConstraintSet],
+          });
+          await new Promise((resolve) => window.setTimeout(resolve, 90));
+        } catch {
+          // Ignore torch failures and keep software flash pulse only.
+        }
+      } else {
+        await new Promise((resolve) => window.setTimeout(resolve, 70));
+      }
+    }
+
+    context.drawImage(video, 0, 0, width, height);
+
+    if (flashEnabled && canUseTorchFlash && track) {
+      try {
+        await track.applyConstraints({
+          advanced: [{ torch: false } as MediaTrackConstraintSet],
+        });
+      } catch {
+        // Ignore torch reset failures.
+      }
+    }
+    if (flashEnabled) {
+      window.setTimeout(() => setFlashPulse(false), 120);
+    }
+
+    const blob = await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob(resolve, "image/jpeg", 0.95);
+    });
+    if (!blob) {
+      setFeedback("Unable to capture photo.");
+      return;
+    }
+
+    const fileToUpload = new File([blob], `cam-${Date.now()}.jpg`, {
+      type: "image/jpeg",
+    });
+    setSelectedFile(fileToUpload);
+    await uploadPhoto(fileToUpload);
+  }
+
+  async function onUpload(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!ensureGuestName()) return;
+
+    if (!selectedFile) {
+      setFeedback("Please capture or pick a photo first.");
+      return;
+    }
+    await uploadPhoto(selectedFile);
+  }
+
+  async function openQrSheet() {
+    if (!shareableCameraUrl) {
+      setFeedback("Missing camera share link.");
+      return;
+    }
+    setShowQrSheet(true);
+    if (qrImageDataUrl || qrRendering) return;
+
+    setQrRendering(true);
+    try {
+      const dataUrl = await QRCode.toDataURL(shareableCameraUrl, {
+        width: 520,
+        margin: 1,
+      });
+      setQrImageDataUrl(dataUrl);
+    } catch {
+      setFeedback("Unable to render QR code right now.");
+    } finally {
+      setQrRendering(false);
+    }
+  }
+
+  async function shareCameraLink() {
+    if (!shareableCameraUrl) {
+      setFeedback("Missing camera share link.");
+      return;
+    }
+
+    try {
+      setSharing(true);
+      if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
+        await navigator.share({
+          title: settings.cameraEventTitle,
+          text: `Join ${settings.cameraEventTitle} camera`,
+          url: shareableCameraUrl,
+        });
+        return;
+      }
+
+      await navigator.clipboard.writeText(shareableCameraUrl);
+      setFeedback("Camera link copied. You can paste and share it.");
+    } catch {
+      setFeedback("Sharing cancelled or not available on this device.");
+    } finally {
+      setSharing(false);
+    }
+  }
+
+  async function applyZoomLevel(level: number) {
+    const stream = streamRef.current;
+    const track = stream?.getVideoTracks?.()[0];
+    if (!track || !Number.isFinite(level)) return;
+
+    try {
+      const capabilities = (
+        track as MediaStreamTrack & {
+          getCapabilities?: () => unknown;
+        }
+      ).getCapabilities?.();
+
+      const zoomCapability = (capabilities as Record<string, unknown> | undefined)?.[
+        "zoom"
+      ] as
+        | { min?: number; max?: number; step?: number }
+        | undefined;
+      if (!zoomCapability || typeof zoomCapability.min !== "number" || typeof zoomCapability.max !== "number") {
+        return;
+      }
+
+      const clamped = Math.max(zoomCapability.min, Math.min(level, zoomCapability.max));
+      await track.applyConstraints({
+        advanced: [{ zoom: clamped } as MediaTrackConstraintSet],
+      });
+      setSelectedZoom(level);
+    } catch {
+      // Ignore zoom apply failures on unsupported browsers.
+    }
+  }
+
+  function toggleFlashOption() {
+    setFlashEnabled((current) => !current);
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadSession = async () => {
+      if (!eventId || !cameraToken) {
+        if (!cancelled) {
+          setError("Missing camera QR parameters.");
+          setLoading(false);
+        }
+        return;
+      }
+
+      const device = readOrCreateDeviceId(eventId);
+      try {
+        const sessionParams = new URLSearchParams({ e: eventId, t: cameraToken });
+        const response = await fetch(`/api/camera/session?${sessionParams.toString()}`);
+        const payload = await response.json();
+        if (!response.ok) {
+          if (!cancelled) {
+            setError(payload.error ?? "Invalid QR session.");
+          }
+          return;
+        }
+
+        if (!cancelled) {
+          setDeviceId(device);
+          let persistedGuestName = "";
+          try {
+            persistedGuestName = window.localStorage
+              .getItem(makeGuestNameStorageKey(eventId))
+              ?.trim() ?? "";
+          } catch {
+            persistedGuestName = "";
+          }
+          setSettings({
+            cameraEnabled: Boolean(payload.settings?.cameraEnabled),
+            cameraRequireApproval: Boolean(payload.settings?.cameraRequireApproval),
+            cameraGalleryUnlockDate: payload.settings?.cameraGalleryUnlockDate ?? "",
+            cameraGalleryUnlockTime: payload.settings?.cameraGalleryUnlockTime ?? "",
+            cameraMaxUploadMb: Number(payload.settings?.cameraMaxUploadMb ?? 3),
+            cameraShotLimitPerInvite: Number(payload.settings?.cameraShotLimitPerInvite ?? 27),
+            cameraLandingEnabled:
+              typeof payload.settings?.cameraLandingEnabled === "boolean"
+                ? payload.settings.cameraLandingEnabled
+                : true,
+            cameraEventTitle: payload.settings?.cameraEventTitle ?? "Guest Camera",
+            cameraEventSubtitle:
+              payload.settings?.cameraEventSubtitle ??
+              "Capture moments from our celebration.",
+            cameraCoverImageUrl: payload.settings?.cameraCoverImageUrl ?? "",
+            cameraStartButtonLabel:
+              payload.settings?.cameraStartButtonLabel ?? "Start Camera",
+          });
+          setUploaderName(persistedGuestName);
+          setGuestNameDraft(persistedGuestName);
+        }
+      } catch {
+        if (!cancelled) {
+          setError("Unable to validate camera session.");
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+
+    void loadSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [cameraToken, eventId]);
+
+  useEffect(() => {
+    if (!eventId || !cameraToken || !deviceId || loading || error) return;
+    const timer = window.setTimeout(() => {
+      void loadGallery();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [cameraToken, deviceId, error, eventId, loadGallery, loading]);
+
+  useEffect(
+    () => () => {
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl);
+      }
+      stopCamera(false);
+    },
+    [previewUrl, stopCamera],
+  );
+
+  useEffect(() => {
+    if (showLandingScreen) return;
+    if (cameraOpen || uploading || cameraTransitioning) return;
+    if (!keepCameraActive || cameraPermissionFailed || !canCaptureMoreShots) return;
+
+    const timer = window.setTimeout(() => {
+      void startCamera();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [
+    cameraOpen,
+    cameraPermissionFailed,
+    cameraTransitioning,
+    canCaptureMoreShots,
+    keepCameraActive,
+    showLandingScreen,
+    startCamera,
+    uploading,
+  ]);
+
+  useEffect(() => {
+    if (!cameraOpen) return;
+    const video = videoRef.current;
+    const stream = streamRef.current;
+    if (!video || !stream) return;
+    const track = stream.getVideoTracks()[0];
+
+    let cancelled = false;
+    const attachAndPlay = async () => {
+      video.muted = true;
+      video.autoplay = true;
+      video.playsInline = true;
+      video.setAttribute("playsinline", "true");
+      video.setAttribute("webkit-playsinline", "true");
+      video.srcObject = stream;
+
+      try {
+        await video.play();
+      } catch {
+        // Playback can fail on some browsers until user interacts again.
+      }
+
+      try {
+        const capabilities = (
+          track as MediaStreamTrack & {
+            getCapabilities?: () => unknown;
+          }
+        ).getCapabilities?.();
+
+        const torchCap = (capabilities as Record<string, unknown> | undefined)?.["torch"];
+        setTorchSupported(Boolean(torchCap));
+
+        const zoomCap = (capabilities as Record<string, unknown> | undefined)?.["zoom"] as
+          | { min?: number; max?: number }
+          | undefined;
+        if (zoomCap && typeof zoomCap.min === "number" && typeof zoomCap.max === "number") {
+          const min = Math.max(1, Math.ceil(zoomCap.min));
+          const max = Math.max(min, Math.floor(zoomCap.max));
+          const built: number[] = [];
+          for (let zoom = min; zoom <= Math.min(max, 3); zoom += 1) {
+            built.push(zoom);
+          }
+          if (!built.includes(1)) {
+            built.unshift(1);
+          }
+          const uniqueSorted = Array.from(new Set(built)).sort((a, b) => a - b);
+          setZoomOptions(uniqueSorted);
+          const defaultZoom = uniqueSorted.includes(1) ? 1 : uniqueSorted[0];
+          setSelectedZoom(defaultZoom);
+          if (defaultZoom) {
+            const clamped = Math.max(
+              zoomCap.min,
+              Math.min(defaultZoom, zoomCap.max),
+            );
+            await track.applyConstraints({
+              advanced: [{ zoom: clamped } as MediaTrackConstraintSet],
+            });
+          }
+        } else {
+          setZoomOptions([1]);
+          setSelectedZoom(1);
+        }
+      } catch {
+        setTorchSupported(false);
+        setZoomOptions([1]);
+        setSelectedZoom(1);
+      }
+
+      window.setTimeout(() => {
+        if (cancelled) return;
+        if (!video.videoWidth || !video.videoHeight) {
+          setFeedback(
+            "Camera opened but preview is blocked. Try closing and opening camera again, or use upload fallback.",
+          );
+        }
+      }, 900);
+    };
+
+    void attachAndPlay();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [cameraOpen]);
+
+  if (loading) {
+    return (
+      <main className="mx-auto max-w-xl px-4 py-10 text-center text-sm text-[var(--ink-soft)]">
+        Validating camera access...
+      </main>
+    );
+  }
+
+  if (error) {
+    const missingQrParams = error === "Missing camera QR parameters.";
+    return (
+      <main className="mx-auto max-w-xl px-4 py-10">
+        {missingQrParams ? (
+          <section className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5">
+            <h1 className="text-xl font-semibold text-[var(--ink-deep)]">
+              Camera link required
+            </h1>
+            <p className="mt-2 text-sm text-[var(--ink-soft)]">
+              This page needs a QR-generated link with session parameters.
+            </p>
+            <div className="mt-4 rounded-xl border border-[var(--error-border)] bg-[var(--error-soft)] p-3 text-sm text-[var(--error-text)]">
+              Missing camera QR parameters.
+            </div>
+            <div className="mt-4 space-y-2 text-sm text-[var(--ink-soft)]">
+              <p>Use a link that contains both `e` and `t` query params.</p>
+              <p>
+                Example: <span className="break-all">/cam?e=RJ2026&t=your_signed_token</span>
+              </p>
+              <p>
+                Generate one from{" "}
+                <a
+                  href="/admin/camera"
+                  className="font-medium text-[var(--accent)] underline underline-offset-2"
+                >
+                  Camera Studio
+                </a>{" "}
+                using Guest QR Generator.
+              </p>
+            </div>
+          </section>
+        ) : (
+          <div className="rounded-xl border border-[var(--error-border)] bg-[var(--error-soft)] p-4 text-sm text-[var(--error-text)]">
+            {error}
+          </div>
+        )}
+      </main>
+    );
+  }
+
+  const galleryUnlockMessage = resolveGalleryUnlockMessage(settings);
+  const galleryUnlockAt = (() => {
+    const date = settings.cameraGalleryUnlockDate.trim();
+    const time = settings.cameraGalleryUnlockTime.trim() || "00:00";
+    if (!date) return null;
+    const value = new Date(`${date}T${time}:00`);
+    if (Number.isNaN(value.getTime())) return null;
+    return value;
+  })();
+  const isGalleryLockedForViewer =
+    !isAdminViewer &&
+    Boolean(galleryUnlockAt && galleryUnlockAt.getTime() > Date.now());
+  const capturerOptions = Array.from(
+    new Set(
+      galleryItems
+        .map((item) => item.uploaderName.trim())
+        .filter(Boolean),
+    ),
+  ).sort((a, b) => a.localeCompare(b));
+  const filteredGalleryItems = (() => {
+    if (galleryFilterMode === "mine") {
+      return galleryItems.filter(
+        (item) =>
+          item.isOwnPhoto ||
+          (normalizedGuestName &&
+            item.uploaderName.trim().toLowerCase() ===
+              normalizedGuestName.toLowerCase()),
+      );
+    }
+    if (galleryFilterMode === "capturer") {
+      const selected = selectedCapturer.trim().toLowerCase();
+      if (!selected) return galleryItems;
+      return galleryItems.filter(
+        (item) => item.uploaderName.trim().toLowerCase() === selected,
+      );
+    }
+    return galleryItems;
+  })();
+  const isGuestNameModalVisible =
+    showGuestNameModal || (!showLandingScreen && !normalizedGuestName);
+
+  async function downloadFilteredGallery() {
+    if (filteredGalleryItems.length === 0 || downloadingGallery) return;
+    setDownloadingGallery(true);
+
+    try {
+      const safeEvent = (settings.cameraEventTitle || "event")
+        .replace(/[^a-z0-9-_]+/gi, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 40)
+        .toLowerCase();
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+
+      for (let index = 0; index < filteredGalleryItems.length; index += 1) {
+        const item = filteredGalleryItems[index];
+        const response = await fetch(item.imageUrl);
+        if (!response.ok) continue;
+        const blob = await response.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        const fileName = `${safeEvent || "event"}-${index + 1}-${item.uploaderName
+          .replace(/[^a-z0-9-_]+/gi, "-")
+          .replace(/^-+|-+$/g, "")
+          .slice(0, 28)
+          .toLowerCase()}-${stamp}.jpg`;
+
+        const anchor = document.createElement("a");
+        anchor.href = objectUrl;
+        anchor.download = fileName;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        URL.revokeObjectURL(objectUrl);
+        await new Promise((resolve) => window.setTimeout(resolve, 140));
+      }
+    } finally {
+      setDownloadingGallery(false);
+    }
+  }
+
+  return (
+    <main className="h-[100dvh] overflow-hidden bg-[#090909] text-white">
+      {showLandingScreen ? (
+        <section className="relative flex h-[100dvh] items-end justify-center overflow-hidden px-4 py-10">
+          {settings.cameraCoverImageUrl ? (
+            <img
+              src={settings.cameraCoverImageUrl}
+              alt="Event camera cover"
+              className="absolute inset-0 h-full w-full object-cover object-[50%_22%]"
+            />
+          ) : (
+            <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_#454545_0%,_#121212_52%,_#060606_100%)]" />
+          )}
+          <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-black/40" />
+          <div className="relative z-10 w-full max-w-md rounded-3xl border border-white/20 bg-black/40 p-5 backdrop-blur-sm">
+            <h1 className="mt-2 text-3xl font-semibold">{settings.cameraEventTitle}</h1>
+            <p className="mt-2 text-sm text-white/80">{settings.cameraEventSubtitle}</p>
+            <button
+              type="button"
+              className="mt-5 w-full rounded-full bg-white px-5 py-3 text-sm font-semibold uppercase tracking-[0.12em] text-black"
+              onClick={() => {
+                setStarted(true);
+                setKeepCameraActive(true);
+                void startCamera();
+              }}
+            >
+              {settings.cameraStartButtonLabel}
+            </button>
+          </div>
+        </section>
+      ) : (
+        <div className="mx-auto flex h-[100dvh] w-full max-w-md flex-col overflow-hidden">
+          <section className="relative h-full overflow-hidden bg-black sm:border sm:border-white/15">
+            {cameraOpen ? (
+              <video
+                ref={videoRef}
+                className="absolute inset-0 h-full w-full object-cover"
+                autoPlay
+                muted
+                playsInline
+              />
+            ) : (
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_#3d3d3d_0%,_#141414_52%,_#050505_100%)]" />
+            )}
+
+            <div className="pointer-events-none absolute inset-x-0 top-0 h-36 bg-gradient-to-b from-black/80 to-transparent" />
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-52 bg-gradient-to-t from-black/90 via-black/55 to-transparent" />
+            {flashPulse ? (
+              <div className="pointer-events-none absolute inset-0 z-[5] bg-white/70 mix-blend-screen" />
+            ) : null}
+
+            <div className="relative z-10 flex items-start justify-between p-4">
+              <button
+                type="button"
+                className="flex h-10 w-10 items-center justify-center rounded-full border border-white/30 bg-black/45 text-white"
+                onClick={() => returnToCameraLanding()}
+                aria-label="Close camera"
+              >
+                <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
+                  <path
+                    d="M18.3 5.71a1 1 0 00-1.41 0L12 10.59 7.11 5.7A1 1 0 005.7 7.12L10.58 12l-4.9 4.89a1 1 0 101.42 1.41L12 13.41l4.89 4.9a1 1 0 001.41-1.42L13.42 12l4.9-4.89a1 1 0 00-.02-1.4z"
+                    fill="currentColor"
+                  />
+                </svg>
+              </button>
+              <button
+                type="button"
+                className="flex h-12 w-12 items-center justify-center rounded-xl border border-white/30 bg-black/45 text-white"
+                onClick={() => setShowFallbackUpload((current) => !current)}
+                aria-label="Upload photo"
+              >
+                <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
+                  <path
+                    d="M20 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V6a2 2 0 00-2-2zM8.5 11A1.5 1.5 0 1110 9.5 1.5 1.5 0 018.5 11zm3.8 6H5.2l3.3-4.2 2.2 2.7 3.2-3.8L18.8 17h-5.7zM19 8h-2V6h-2V4h2V2h2v2h2v2h-2z"
+                    fill="currentColor"
+                  />
+                </svg>
+              </button>
+            </div>
+
+            <div className="pointer-events-none absolute inset-x-0 top-7 z-10 px-14 text-center">
+              <p className="truncate text-3xl font-semibold tracking-tight text-white drop-shadow-lg">
+                {settings.cameraEventTitle}
+              </p>
+              <p className="truncate text-xs text-white/75 drop-shadow">{settings.cameraEventSubtitle}</p>
+            </div>
+
+            <div className="absolute right-3 top-1/2 z-10 flex -translate-y-1/2 flex-col gap-2">
+              <button
+                type="button"
+                className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/25 bg-black/55 text-white/95 backdrop-blur-sm"
+                onClick={() => void openQrSheet()}
+                aria-label="Open QR share"
+              >
+                <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
+                  <path
+                    d="M3 3h7v7H3V3zm11 0h7v7h-7V3zM3 14h7v7H3v-7zm13 2h2v2h-2v-2zm-2-2h2v2h-2v-2zm4 4h2v2h-2v-2zm-4 2h2v2h-2v-2zm4-10h3v3h-3v-3z"
+                    fill="currentColor"
+                  />
+                </svg>
+              </button>
+              <button
+                type="button"
+                className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/25 bg-black/55 text-white/95 backdrop-blur-sm disabled:opacity-40"
+                onClick={() => void shareCameraLink()}
+                disabled={sharing}
+                aria-label="Share camera link"
+              >
+                <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
+                  <path
+                    d="M14 3l7 7-7 7-1.4-1.4 4.6-4.6H8a5 5 0 000 10h3v2H8a7 7 0 010-14h9.2l-4.6-4.6L14 3z"
+                    fill="currentColor"
+                  />
+                </svg>
+              </button>
+            </div>
+
+            {isGuestNameModalVisible ? (
+              <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/55 px-6">
+                <form
+                  className="w-full max-w-xs rounded-2xl border border-white/25 bg-black/85 p-4 backdrop-blur-sm"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    saveGuestName(guestNameDraft);
+                  }}
+                >
+                  <p className="text-center text-lg font-semibold text-white">Your name</p>
+                  <p className="mt-2 text-center text-xs leading-relaxed text-white/80">
+                    We will label your captured photos with this name.
+                  </p>
+                  <label className="mt-4 block text-xs text-white/75">
+                    <span>Guest name</span>
+                    <input
+                      className={`mt-1 w-full rounded-lg bg-black/45 px-3 py-2 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/50 ${
+                        guestNameError ? "border border-rose-400/90" : "border border-white/25"
+                      }`}
+                      value={guestNameDraft}
+                      onChange={(event) => {
+                        setGuestNameDraft(event.target.value);
+                        if (guestNameError) setGuestNameError("");
+                      }}
+                      onInvalid={(event) =>
+                        event.currentTarget.setCustomValidity("Guest name is required.")
+                      }
+                      onInput={(event) => event.currentTarget.setCustomValidity("")}
+                      placeholder="Enter your name"
+                      maxLength={120}
+                      required
+                      autoFocus
+                    />
+                  </label>
+                  {guestNameError ? (
+                    <p className="mt-2 text-xs text-rose-300">{guestNameError}</p>
+                  ) : null}
+                  <button
+                    type="submit"
+                    className="mt-4 w-full rounded-lg bg-white px-3 py-2 text-sm font-semibold text-black"
+                  >
+                    Continue
+                  </button>
+                </form>
+              </div>
+            ) : null}
+
+            {showQrSheet ? (
+              <div className="absolute inset-0 z-40 flex items-end bg-black/50 p-3">
+                <div className="w-full rounded-3xl border border-white/20 bg-[#2c2940] p-4 shadow-2xl backdrop-blur-sm">
+                  <div className="flex items-center justify-between">
+                    <button
+                      type="button"
+                      className="rounded-full border border-white/25 bg-white/10 px-3 py-1 text-xs text-white"
+                      onClick={() => setShowQrSheet(false)}
+                    >
+                      Close
+                    </button>
+                    <p className="text-sm font-semibold text-white">Share QR Code</p>
+                    <div className="w-12" />
+                  </div>
+                  <p className="mt-2 text-center text-xs text-white/75">
+                    Anyone can join this camera by scanning this QR code.
+                  </p>
+
+                  <div className="mt-4 rounded-2xl border border-white/20 bg-white/95 p-4">
+                    {qrRendering ? (
+                      <div className="flex h-56 items-center justify-center text-sm text-black/70">
+                        Rendering QR...
+                      </div>
+                    ) : qrImageDataUrl ? (
+                      <img
+                        src={qrImageDataUrl}
+                        alt="Guest camera QR code"
+                        className="mx-auto h-56 w-56 rounded-xl object-contain"
+                      />
+                    ) : (
+                      <div className="flex h-56 items-center justify-center text-sm text-black/70">
+                        QR unavailable.
+                      </div>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    className="mt-4 w-full rounded-xl border border-white/20 bg-white/10 px-4 py-3 text-sm font-semibold text-white disabled:opacity-40"
+                    onClick={() => void shareCameraLink()}
+                    disabled={sharing || !shareableCameraUrl}
+                  >
+                    {sharing ? "Sharing..." : "Share Link"}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {!cameraOpen ? (
+              <div className="absolute inset-x-0 bottom-28 z-10 px-6">
+                <button
+                  type="button"
+                  className="w-full rounded-full bg-white px-5 py-3 text-sm font-semibold uppercase tracking-[0.12em] text-black disabled:opacity-40"
+                  onClick={() => void startCamera()}
+                  disabled={!canCaptureMoreShots || cameraTransitioning}
+                >
+                  {cameraTransitioning ? "Switching..." : "Open Camera"}
+                </button>
+              </div>
+            ) : null}
+
+            <div className="absolute inset-x-0 bottom-0 z-10 px-4 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+              <div className="mx-auto max-w-sm">
+                <div className="mb-3 grid grid-cols-3 items-center gap-2">
+                  <div className="flex justify-start">
+                    <button
+                      type="button"
+                      className="flex h-11 w-11 items-center justify-center rounded-full border border-white/35 bg-black/50 text-white disabled:opacity-40"
+                      onClick={() => toggleFlashOption()}
+                      disabled={!cameraOpen}
+                      aria-label="Toggle flash"
+                    >
+                      <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
+                        <path
+                          d="M11 2L5 13h5l-1 9 10-13h-6l2-7h-4z"
+                          fill={flashEnabled ? "currentColor" : "none"}
+                          stroke="currentColor"
+                          strokeWidth="1.6"
+                        />
+                      </svg>
+                    </button>
+                  </div>
+
+                  <div className="flex justify-center gap-2">
+                  {zoomOptions.map((zoom) => (
+                    <button
+                      key={zoom}
+                      type="button"
+                      className={`rounded-lg px-3 py-1 text-xs font-semibold ${
+                        selectedZoom === zoom
+                          ? "bg-white text-black"
+                          : "border border-white/30 bg-black/45 text-white"
+                      }`}
+                      onClick={() => void applyZoomLevel(zoom)}
+                      disabled={!cameraOpen || cameraTransitioning}
+                    >
+                      {zoom}x
+                    </button>
+                  ))}
+                  </div>
+
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      className="flex h-11 w-11 items-center justify-center rounded-full border border-white/35 bg-black/50 text-white disabled:opacity-40"
+                      onClick={() => void switchCameraFacing()}
+                      disabled={!cameraOpen || uploading || cameraTransitioning}
+                      aria-label="Flip camera"
+                    >
+                      <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
+                        <path
+                          d="M7 7h6l-2-2m2 2l-2 2M17 17h-6l2 2m-2-2l2-2M3 8a5 5 0 015-5h8a5 5 0 015 5v8a5 5 0 01-5 5H8a5 5 0 01-5-5V8z"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.8"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="rounded-3xl border border-white/20 bg-black/55 px-3 py-3 backdrop-blur-sm">
+                  <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-3">
+                    <div className="flex min-w-0 items-end justify-start gap-2 pr-2">
+                      <p className="text-4xl font-extrabold leading-none text-white">
+                        {usage.shotsLimit > 0 ? usage.shotsLeft ?? 0 : "Unlimited"}
+                      </p>
+                      <p className="pb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/85">
+                        Shots Remaining
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      className="flex h-20 w-20 items-center justify-center rounded-full border-4 border-white bg-white/20 disabled:opacity-40"
+                      onClick={() => void captureShot()}
+                      disabled={
+                        !cameraOpen ||
+                        !canCaptureMoreShots ||
+                        uploading ||
+                        cameraTransitioning
+                      }
+                      aria-label="Capture shot"
+                    >
+                      <span className="h-14 w-14 rounded-full bg-white" />
+                    </button>
+
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        className="h-16 w-16 overflow-hidden rounded-xl border border-white/40 bg-black/45 shadow-xl"
+                        onClick={() => setShowGallerySheet(true)}
+                        aria-label="Open gallery"
+                      >
+                        {previewUrl ? (
+                          <img
+                            src={previewUrl}
+                            alt="Latest shot preview"
+                            className={`h-full w-full object-cover transition duration-300 ${
+                              uploading ? "scale-105 blur-[2px] opacity-80" : ""
+                            }`}
+                          />
+                        ) : (
+                          <span className="inline-flex h-full w-full items-center justify-center text-[10px] text-white/75">
+                            Gallery
+                          </span>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {showGallerySheet ? (
+              <div className="absolute inset-0 z-40 flex h-full flex-col bg-black">
+                <div className="relative h-56 overflow-hidden">
+                  {filteredGalleryItems[0]?.imageUrl ? (
+                    <img
+                      src={filteredGalleryItems[0].imageUrl}
+                      alt="Gallery cover"
+                      className={`h-full w-full object-cover ${
+                        isGalleryLockedForViewer ? "blur-md brightness-75" : "brightness-75"
+                      }`}
+                    />
+                  ) : (
+                    <div className="h-full w-full bg-[radial-gradient(circle_at_top,_#454545_0%,_#121212_52%,_#060606_100%)]" />
+                  )}
+                  <div className="absolute inset-0 bg-gradient-to-t from-black via-black/45 to-black/10" />
+                  <div className="absolute inset-x-4 top-4 flex items-center justify-between">
+                    <button
+                      type="button"
+                      className="rounded-full border border-white/30 bg-black/40 px-3 py-1 text-xs text-white"
+                      onClick={() => setShowGallerySheet(false)}
+                    >
+                      Back
+                    </button>
+                    <span className="text-xs text-white/80">
+                      {filteredGalleryItems.length} photo
+                      {filteredGalleryItems.length === 1 ? "" : "s"}
+                    </span>
+                  </div>
+                  <div className="absolute inset-x-4 bottom-4">
+                    <p className="text-3xl font-semibold text-white drop-shadow">
+                      {settings.cameraEventTitle}
+                    </p>
+                    <p className="mt-1 text-sm text-white/80">
+                      {capturerOptions.length} participant
+                      {capturerOptions.length === 1 ? "" : "s"}
+                    </p>
+                    {galleryUnlockMessage ? (
+                      <p className="mt-2 text-xs text-white/75">{galleryUnlockMessage}</p>
+                    ) : null}
+                    <div className="mt-3 flex gap-2">
+                      <button
+                        type="button"
+                        className="rounded-full border border-white/25 bg-white/20 px-4 py-2 text-sm font-semibold text-white"
+                        onClick={() => {
+                          setShowGallerySheet(false);
+                          setShowFallbackUpload(true);
+                        }}
+                      >
+                        Upload
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-full border border-white/25 bg-white/20 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
+                        onClick={() => void downloadFilteredGallery()}
+                        disabled={downloadingGallery || filteredGalleryItems.length === 0}
+                      >
+                        {downloadingGallery ? "Exporting..." : "Export"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex-1 overflow-y-auto px-4 pb-24 pt-4">
+                  {galleryFilterMode === "capturer" ? (
+                    <div className="mb-3">
+                      <label className="text-xs text-white/70">Choose a Capturer</label>
+                      <select
+                        className="mt-1 w-full rounded-xl border border-white/20 bg-black/45 px-3 py-2 text-sm text-white"
+                        value={selectedCapturer}
+                        onChange={(event) => setSelectedCapturer(event.target.value)}
+                      >
+                        <option value="">All Capturers</option>
+                        {capturerOptions.map((name) => (
+                          <option key={name} value={name}>
+                            {name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : null}
+
+                  {filteredGalleryItems.length === 0 ? (
+                    <p className="rounded-lg border border-dashed border-white/20 px-3 py-2 text-sm text-white/70">
+                      No photos yet.
+                    </p>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-3">
+                      {filteredGalleryItems.map((item) => (
+                        <article
+                          key={item.id}
+                          className="overflow-hidden rounded-2xl border border-white/10 bg-black/35"
+                        >
+                          <img
+                            src={item.imageUrl}
+                            alt={`Photo by ${item.uploaderName}`}
+                            className={`h-52 w-full object-cover ${
+                              isGalleryLockedForViewer ? "blur-md brightness-75" : ""
+                            }`}
+                            loading="lazy"
+                          />
+                          <div className="px-3 py-2">
+                            <p className="truncate text-xs text-white/85">{item.uploaderName}</p>
+                            <p className="truncate text-[10px] text-white/60">{item.createdAt}</p>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {isGalleryLockedForViewer ? (
+                  <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-6">
+                    <div className="rounded-2xl border border-white/20 bg-black/75 px-4 py-3 text-center">
+                      <p className="text-sm font-semibold text-white">Gallery is locked</p>
+                      <p className="mt-1 text-xs text-white/75">
+                        Photos will fully unlock based on your admin unlock schedule.
+                      </p>
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="absolute inset-x-0 bottom-0 grid grid-cols-3 border-t border-white/10 bg-black/90 px-2 py-2 text-sm">
+                  <button
+                    type="button"
+                    className={`rounded-xl px-2 py-2 ${
+                      galleryFilterMode === "all"
+                        ? "text-lime-300 underline decoration-2 underline-offset-4"
+                        : "text-white/70"
+                    }`}
+                    onClick={() => setGalleryFilterMode("all")}
+                  >
+                    All
+                  </button>
+                  <button
+                    type="button"
+                    className={`rounded-xl px-2 py-2 ${
+                      galleryFilterMode === "mine"
+                        ? "text-lime-300 underline decoration-2 underline-offset-4"
+                        : "text-white/70"
+                    }`}
+                    onClick={() => setGalleryFilterMode("mine")}
+                  >
+                    My Capture
+                  </button>
+                  <button
+                    type="button"
+                    className={`rounded-xl px-2 py-2 ${
+                      galleryFilterMode === "capturer"
+                        ? "text-lime-300 underline decoration-2 underline-offset-4"
+                        : "text-white/70"
+                    }`}
+                    onClick={() => setGalleryFilterMode("capturer")}
+                  >
+                    Choose a Capturer
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            <canvas ref={canvasRef} className="hidden" />
+          </section>
+
+          {showFallbackUpload ? (
+            <section className="mt-3 rounded-2xl border border-white/15 bg-white/5 p-3">
+              <form onSubmit={onUpload} className="space-y-3">
+                <label className="flex flex-col gap-1 text-xs text-white/75">
+                  <span>Name (optional)</span>
+                  <input
+                    className="rounded-lg border border-white/20 bg-black/30 px-3 py-2 text-sm text-white"
+                    value={uploaderName}
+                    onChange={(event) => setUploaderName(event.target.value)}
+                    maxLength={120}
+                  />
+                </label>
+                <label className="flex flex-col gap-1 text-xs text-white/75">
+                  <span>Upload fallback (from gallery/files)</span>
+                  <input
+                    className="rounded-lg border border-white/20 bg-black/30 px-3 py-2 text-sm text-white"
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
+                  />
+                </label>
+                <button
+                  type="submit"
+                  className="w-full rounded-full bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-black disabled:opacity-40"
+                  disabled={uploading || !selectedFile || !canCaptureMoreShots}
+                >
+                  {uploading ? "Uploading..." : "Upload Selected Photo"}
+                </button>
+              </form>
+            </section>
+          ) : null}
+
+        </div>
+      )}
+    </main>
+  );
+}
+
+
