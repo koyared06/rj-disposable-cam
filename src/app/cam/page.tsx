@@ -465,7 +465,7 @@ export default function CameraLandingPage() {
       }
 
       setSelectedFile(fileToUpload);
-      setFeedback("Shot uploaded.");
+      setFeedback("");
       await loadGallery();
       return true;
     } catch (error) {
@@ -613,11 +613,26 @@ export default function CameraLandingPage() {
     );
     setUploadBatchTotal(targetCount);
     setUploadBatchDone(0);
-    setFeedback(
-      `Uploading ${targetCount} selected shot${
-        targetCount === 1 ? "" : "s"
-      } in background. Keep this app open.`,
+    setFeedback("");
+  }
+
+  function retryFailedShots() {
+    if (failedShotsCount < 1) {
+      setFeedback("No failed shots to retry.");
+      return;
+    }
+
+    const retryCount = localShots.filter((shot) => shot.status === "failed").length;
+    setLocalShots((current) =>
+      current.map((shot) =>
+        shot.status === "failed"
+          ? { ...shot, status: "queued", selected: true }
+          : shot,
+      ),
     );
+    setUploadBatchTotal(retryCount);
+    setUploadBatchDone(0);
+    setFeedback("");
   }
 
   async function captureShot() {
@@ -1228,10 +1243,10 @@ export default function CameraLandingPage() {
               <div className="pointer-events-none absolute inset-0 z-[5] bg-white/70 mix-blend-screen" />
             ) : null}
 
-            <div className="relative z-10 flex items-start justify-between p-4">
+            <div className="relative z-20 flex items-start justify-between p-4">
               <button
                 type="button"
-                className="flex h-10 w-10 items-center justify-center rounded-full border border-white/30 bg-black/45 text-white"
+                className="flex h-12 w-12 items-center justify-center rounded-full border border-white/35 bg-black/55 text-white shadow-lg"
                 onClick={() => returnToCameraLanding()}
                 aria-label="Close camera"
               >
@@ -1257,53 +1272,18 @@ export default function CameraLandingPage() {
               </button>
             </div>
 
-            <div className="pointer-events-none absolute inset-x-0 top-7 z-10 px-14 text-center">
-              <p className="truncate text-3xl font-semibold tracking-tight text-white drop-shadow-lg">
+            <div className="pointer-events-none absolute inset-x-0 top-20 z-10 px-12 text-center">
+              <p className="truncate text-[2rem] font-semibold tracking-tight text-white drop-shadow-lg">
                 {settings.cameraEventTitle}
               </p>
               <p className="truncate text-xs text-white/75 drop-shadow">{settings.cameraEventSubtitle}</p>
             </div>
-            <div className="pointer-events-none absolute inset-x-0 top-20 z-10 px-6 text-center">
+            <div className="pointer-events-none absolute inset-x-0 top-[8.5rem] z-10 px-6 text-center">
               <p className="text-[11px] text-white/80">
                 Host shot limit: {usage.shotsLimit > 0 ? usage.shotsLimit : "Unlimited"} | Captured:{" "}
                 {capturedShotsCount}
               </p>
               {feedback ? <p className="mt-1 text-xs text-amber-200">{feedback}</p> : null}
-              {pendingUploads > 0 ? (
-                <p className="mt-1 text-xs text-rose-200">
-                  Uploading {pendingUploads} shot{pendingUploads === 1 ? "" : "s"} in background.
-                  Keep this app open.
-                </p>
-              ) : uploadedShotsCount > 0 && unsentShotsCount < 1 ? (
-                <p className="mt-1 text-xs text-emerald-200">
-                  All queued shots uploaded ({uploadedShotsCount} total).
-                </p>
-              ) : null}
-              {uploadBatchTotal > 0 ? (
-                <div className="mx-auto mt-1 w-full max-w-xs">
-                  <div className="h-1.5 overflow-hidden rounded-full bg-white/20">
-                    <div
-                      className="h-full rounded-full bg-emerald-300 transition-all duration-300"
-                      style={{ width: `${Math.max(0, Math.min(100, uploadBatchPercent))}%` }}
-                    />
-                  </div>
-                  <p className="mt-1 text-[10px] text-emerald-200">
-                    Uploaded {uploadBatchDone}/{uploadBatchTotal}
-                  </p>
-                </div>
-              ) : null}
-              {unsentShotsCount > 0 ? (
-                <p className="mt-1 text-xs text-white/80">
-                  {unsentShotsCount} local shot{unsentShotsCount === 1 ? "" : "s"} not fully
-                  uploaded yet.
-                </p>
-              ) : null}
-              {failedShotsCount > 0 ? (
-                <p className="mt-1 text-xs text-rose-300">
-                  {failedShotsCount} shot{failedShotsCount === 1 ? "" : "s"} failed to upload.
-                  Check your connection and try again.
-                </p>
-              ) : null}
             </div>
 
             <div className="absolute right-3 top-1/2 z-10 flex -translate-y-1/2 flex-col gap-2">
@@ -1509,14 +1489,14 @@ export default function CameraLandingPage() {
                 <div className="rounded-3xl border border-white/20 bg-black/55 px-3 py-3 backdrop-blur-sm">
                   <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3">
                     <div className="flex min-w-[7.5rem] items-center justify-start gap-2 pr-2">
-                      <p className="text-4xl font-extrabold leading-none text-white tabular-nums">
+                      <p className="text-5xl font-extrabold leading-[0.95] text-white tabular-nums">
                         {usage.shotsLimit > 0 ? (
                           <RollingShotsValue value={effectiveShotsLeft ?? 0} />
                         ) : (
                           "∞"
                         )}
                       </p>
-                      <p className="text-[10px] font-semibold uppercase leading-[1.2] tracking-[0.14em] text-white/85">
+                      <p className="text-[8px] font-semibold uppercase leading-[1.15] tracking-[0.18em] text-white/85">
                         Shots Remaining
                       </p>
                     </div>
@@ -1538,7 +1518,7 @@ export default function CameraLandingPage() {
                     <div className="flex min-w-[7.5rem] justify-end">
                       <button
                         type="button"
-                        className="h-16 w-16 overflow-hidden rounded-xl border border-white/40 bg-black/45 shadow-xl"
+                        className="h-14 w-14 shrink-0 overflow-hidden rounded-xl border border-white/40 bg-black/45 shadow-xl"
                         onClick={() => {
                           setShowGallerySheet(true);
                           setShowGalleryLockNotice(true);
@@ -1580,10 +1560,10 @@ export default function CameraLandingPage() {
                     <div className="h-full w-full bg-[radial-gradient(circle_at_top,_#454545_0%,_#121212_52%,_#060606_100%)]" />
                   )}
                   <div className="absolute inset-0 bg-gradient-to-t from-black via-black/45 to-black/10" />
-                  <div className="absolute inset-x-4 top-4 flex items-center justify-between">
+                  <div className="absolute inset-x-4 top-4 z-20 flex items-center justify-between">
                     <button
                       type="button"
-                      className="rounded-full border border-white/30 bg-black/40 px-3 py-1 text-xs text-white"
+                      className="rounded-full border border-white/35 bg-black/55 px-3 py-1.5 text-sm text-white shadow-lg"
                       onClick={() => {
                         setShowGallerySheet(false);
                         setShowGalleryLockNotice(true);
@@ -1596,7 +1576,7 @@ export default function CameraLandingPage() {
                       {filteredGalleryItems.length === 1 ? "" : "s"}
                     </span>
                   </div>
-                  <div className="absolute inset-x-4 bottom-4">
+                  <div className="pointer-events-none absolute inset-x-4 bottom-4">
                     <p className="text-3xl font-semibold text-white drop-shadow">
                       {settings.cameraEventTitle}
                     </p>
@@ -1607,7 +1587,7 @@ export default function CameraLandingPage() {
                     {galleryUnlockMessage ? (
                       <p className="mt-2 text-xs text-white/75">{galleryUnlockMessage}</p>
                     ) : null}
-                    <div className="mt-3 flex flex-wrap gap-2">
+                    <div className="pointer-events-auto mt-3 flex flex-wrap gap-2">
                       <button
                         type="button"
                         className="rounded-full border border-emerald-300/40 bg-emerald-300/20 px-4 py-2 text-sm font-semibold text-emerald-100 disabled:opacity-40"
@@ -1693,9 +1673,47 @@ export default function CameraLandingPage() {
                         >
                           Upload Selected ({selectedForUploadCount})
                         </button>
+                        <button
+                          type="button"
+                          className="rounded-full border border-rose-300/45 bg-rose-300/15 px-3 py-1.5 text-xs font-semibold text-rose-100 disabled:opacity-40"
+                          onClick={() => retryFailedShots()}
+                          disabled={failedShotsCount < 1}
+                        >
+                          Retry Failed ({failedShotsCount})
+                        </button>
                       </div>
 
-                      <div className="mt-3 grid grid-cols-3 gap-2">
+                      {pendingUploads > 0 ? (
+                        <p className="mt-2 text-xs text-rose-200">
+                          Uploading {pendingUploads} shot{pendingUploads === 1 ? "" : "s"} in background.
+                          Keep this app open.
+                        </p>
+                      ) : uploadedShotsCount > 0 && unsentShotsCount < 1 ? (
+                        <p className="mt-2 text-xs text-emerald-200">
+                          All queued shots uploaded ({uploadedShotsCount} total).
+                        </p>
+                      ) : null}
+                      {uploadBatchTotal > 0 ? (
+                        <div className="mt-2 w-full max-w-xs">
+                          <div className="h-1.5 overflow-hidden rounded-full bg-white/20">
+                            <div
+                              className="h-full rounded-full bg-emerald-300 transition-all duration-300"
+                              style={{ width: `${Math.max(0, Math.min(100, uploadBatchPercent))}%` }}
+                            />
+                          </div>
+                          <p className="mt-1 text-[10px] text-emerald-200">
+                            Uploaded {uploadBatchDone}/{uploadBatchTotal}
+                          </p>
+                        </div>
+                      ) : null}
+                      {failedShotsCount > 0 ? (
+                        <p className="mt-1 text-xs text-rose-300">
+                          {failedShotsCount} shot{failedShotsCount === 1 ? "" : "s"} failed to upload.
+                          Tap Retry Failed.
+                        </p>
+                      ) : null}
+
+                      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
                         {localShotsNewestFirst.map((shot) => (
                           <article
                             key={shot.id}
@@ -1726,7 +1744,7 @@ export default function CameraLandingPage() {
                                 {shot.selected ? "Selected" : "Tap"}
                               </span>
                             </button>
-                            <div className="flex items-center justify-between px-2 py-1">
+                            <div className="flex flex-col items-start gap-0.5 px-2 py-1">
                               <span className="text-[10px] text-white/75">
                                 {shot.status === "draft"
                                   ? "Ready"
@@ -1801,7 +1819,7 @@ export default function CameraLandingPage() {
                 </div>
 
                 {isGalleryLockedForViewer && showGalleryLockNotice ? (
-                  <div className="absolute inset-x-4 top-20 z-50">
+                  <div className="absolute inset-x-4 bottom-20 z-50">
                     <div className="rounded-2xl border border-white/20 bg-black/75 px-4 py-3 backdrop-blur-sm">
                       <div className="flex items-start justify-between gap-3">
                         <div>
@@ -1903,6 +1921,7 @@ export default function CameraLandingPage() {
     </main>
   );
 }
+
 
 
 
