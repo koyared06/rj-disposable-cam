@@ -118,6 +118,33 @@ function trackSupportsTorch(track: MediaStreamTrack | null | undefined) {
   return typeof settings?.torch === "boolean";
 }
 
+function RollingShotsValue({ value }: { value: number }) {
+  const valueRef = useRef<HTMLSpanElement | null>(null);
+  useEffect(() => {
+    const node = valueRef.current;
+    if (!node) return;
+    const animation = node.animate(
+      [
+        { transform: "translateY(55%)", opacity: 0.45 },
+        { transform: "translateY(0)", opacity: 1 },
+      ],
+      {
+        duration: 220,
+        easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+      },
+    );
+    return () => animation.cancel();
+  }, [value]);
+
+  return (
+    <span className="relative inline-flex h-[1em] overflow-hidden align-baseline leading-none">
+      <span ref={valueRef} className="inline-block">
+        {value}
+      </span>
+    </span>
+  );
+}
+
 export default function CameraLandingPage() {
   const qrParams = useMemo(() => {
     if (typeof window === "undefined") {
@@ -186,6 +213,9 @@ export default function CameraLandingPage() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const localShotsRef = useRef<LocalShot[]>([]);
+  const queueProcessingRef = useRef(false);
+  const mountedRef = useRef(true);
 
   const pendingUploads = localShots.filter(
     (shot) => shot.status === "queued" || shot.status === "uploading",
@@ -214,10 +244,8 @@ export default function CameraLandingPage() {
     const params = new URLSearchParams({ e: eventId, t: cameraToken });
     return `${base}/cam?${params.toString()}`;
   }, [cameraToken, eventId]);
-  const previewUrl = useMemo(
-    () => (selectedFile ? URL.createObjectURL(selectedFile) : ""),
-    [selectedFile],
-  );
+  const latestLocalPreviewUrl =
+    localShots.length > 0 ? localShots[localShots.length - 1]?.previewUrl ?? "" : "";
   const normalizedGuestName = uploaderName.trim();
   const isAdminViewer = Boolean(adminToken.trim());
 
@@ -392,7 +420,10 @@ export default function CameraLandingPage() {
   }, [cameraFacing, startCamera]);
 
   const uploadPhotoNow = useCallback(async (fileToUpload: File) => {
+    let timeoutHandle: number | null = null;
     try {
+      const abortController = new AbortController();
+      timeoutHandle = window.setTimeout(() => abortController.abort(), 45000);
       const formData = new FormData();
       formData.set("eventId", eventId);
       formData.set("cameraToken", cameraToken);
@@ -403,6 +434,7 @@ export default function CameraLandingPage() {
       const response = await fetch("/api/camera/upload", {
         method: "POST",
         body: formData,
+        signal: abortController.signal,
       });
       const payload = await response.json();
       if (!response.ok) {
@@ -436,11 +468,90 @@ export default function CameraLandingPage() {
       setFeedback("Shot uploaded.");
       await loadGallery();
       return true;
-    } catch {
-      setFeedback("Network error uploading photo.");
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        setFeedback("Upload timed out. Check internet then retry selected shots.");
+      } else {
+        setFeedback("Network error uploading photo.");
+      }
       return false;
+    } finally {
+      if (timeoutHandle !== null) {
+        window.clearTimeout(timeoutHandle);
+      }
     }
   }, [cameraToken, deviceId, eventId, loadGallery, normalizedGuestName]);
+
+  useEffect(() => {
+    localShotsRef.current = localShots;
+  }, [localShots]);
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (uploading || queueProcessingRef.current) return;
+    const nextQueuedShot = localShots.find((shot) => shot.status === "queued");
+    if (!nextQueuedShot) return;
+
+    queueProcessingRef.current = true;
+    const nextFile = nextQueuedShot.file;
+    const nextId = nextQueuedShot.id;
+
+    const processNext = async () => {
+      setLocalShots((current) =>
+        current.map((shot) =>
+          shot.id === nextId ? { ...shot, status: "uploading" } : shot,
+        ),
+      );
+      setUploading(true);
+
+      let ok = false;
+      try {
+        ok = await uploadPhotoNow(nextFile);
+      } catch {
+        ok = false;
+      }
+
+      if (ok) {
+        setLocalShots((current) => {
+          const target = current.find((shot) => shot.id === nextId);
+          if (target) {
+            URL.revokeObjectURL(target.previewUrl);
+          }
+          return current.filter((shot) => shot.id !== nextId);
+        });
+        setUploadedShotsCount((current) => current + 1);
+        setUploadBatchDone((current) => current + 1);
+      } else {
+        setLocalShots((current) =>
+          current.map((shot) =>
+            shot.id === nextId ? { ...shot, status: "failed" } : shot,
+          ),
+        );
+      }
+
+      queueProcessingRef.current = false;
+      if (mountedRef.current) {
+        setUploading(false);
+      }
+    };
+
+    void processNext();
+  }, [localShots, uploading, uploadPhotoNow]);
+
+  useEffect(
+    () => () => {
+      localShotsRef.current.forEach((shot) => {
+        URL.revokeObjectURL(shot.previewUrl);
+      });
+      stopCamera(false);
+    },
+    [stopCamera],
+  );
 
   function addLocalShot(fileToUpload: File) {
     if (!canCaptureMoreShots) {
@@ -508,52 +619,6 @@ export default function CameraLandingPage() {
       } in background. Keep this app open.`,
     );
   }
-
-  useEffect(() => {
-    if (uploading) return;
-    const nextQueuedShot = localShots.find((shot) => shot.status === "queued");
-    if (!nextQueuedShot) return;
-
-    let cancelled = false;
-    const nextFile = nextQueuedShot.file;
-    const nextId = nextQueuedShot.id;
-
-    const processNext = async () => {
-      setLocalShots((current) =>
-        current.map((shot) =>
-          shot.id === nextId ? { ...shot, status: "uploading" } : shot,
-        ),
-      );
-      setUploading(true);
-      const ok = await uploadPhotoNow(nextFile);
-      if (cancelled) return;
-
-      if (ok) {
-        setLocalShots((current) => {
-          const target = current.find((shot) => shot.id === nextId);
-          if (target) {
-            URL.revokeObjectURL(target.previewUrl);
-          }
-          return current.filter((shot) => shot.id !== nextId);
-        });
-        setUploadedShotsCount((current) => current + 1);
-        setUploadBatchDone((current) => current + 1);
-      } else {
-        setLocalShots((current) =>
-          current.map((shot) =>
-            shot.id === nextId ? { ...shot, status: "failed" } : shot,
-          ),
-        );
-      }
-      setUploading(false);
-    };
-
-    void processNext();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [localShots, uploading, uploadPhotoNow]);
 
   async function captureShot() {
     if (!ensureGuestName()) return;
@@ -839,19 +904,6 @@ export default function CameraLandingPage() {
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [unsentShotsCount]);
-
-  useEffect(
-    () => () => {
-      if (previewUrl) {
-        URL.revokeObjectURL(previewUrl);
-      }
-      localShots.forEach((shot) => {
-        URL.revokeObjectURL(shot.previewUrl);
-      });
-      stopCamera(false);
-    },
-    [localShots, previewUrl, stopCamera],
-  );
 
   useEffect(() => {
     if (showLandingScreen) return;
@@ -1455,12 +1507,16 @@ export default function CameraLandingPage() {
                 </div>
 
                 <div className="rounded-3xl border border-white/20 bg-black/55 px-3 py-3 backdrop-blur-sm">
-                  <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-3">
-                    <div className="flex min-w-0 items-end justify-start gap-2 pr-2">
-                      <p className="text-4xl font-extrabold leading-none text-white">
-                        {usage.shotsLimit > 0 ? effectiveShotsLeft ?? 0 : "Unlimited"}
+                  <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3">
+                    <div className="flex min-w-[7.5rem] items-center justify-start gap-2 pr-2">
+                      <p className="text-4xl font-extrabold leading-none text-white tabular-nums">
+                        {usage.shotsLimit > 0 ? (
+                          <RollingShotsValue value={effectiveShotsLeft ?? 0} />
+                        ) : (
+                          "∞"
+                        )}
                       </p>
-                      <p className="pb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/85">
+                      <p className="text-[10px] font-semibold uppercase leading-[1.2] tracking-[0.14em] text-white/85">
                         Shots Remaining
                       </p>
                     </div>
@@ -1479,7 +1535,7 @@ export default function CameraLandingPage() {
                       <span className="h-14 w-14 rounded-full bg-white" />
                     </button>
 
-                    <div className="flex justify-end">
+                    <div className="flex min-w-[7.5rem] justify-end">
                       <button
                         type="button"
                         className="h-16 w-16 overflow-hidden rounded-xl border border-white/40 bg-black/45 shadow-xl"
@@ -1489,9 +1545,9 @@ export default function CameraLandingPage() {
                         }}
                         aria-label="Open gallery"
                       >
-                        {previewUrl ? (
+                        {latestLocalPreviewUrl ? (
                           <img
-                            src={previewUrl}
+                            src={latestLocalPreviewUrl}
                             alt="Latest shot preview"
                             className={`h-full w-full object-cover transition duration-300 ${
                               uploading ? "scale-105 blur-[2px] opacity-80" : ""
