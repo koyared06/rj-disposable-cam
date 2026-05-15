@@ -69,7 +69,7 @@ export async function GET(request: NextRequest) {
     const bytes = await downloadDriveFile(fileId);
     const mimeType = detectImageMimeType(bytes);
 
-    return new NextResponse(bytes, {
+    return new NextResponse(new Uint8Array(bytes), {
       status: 200,
       headers: {
         "Content-Type": mimeType,
@@ -88,4 +88,3 @@ export async function GET(request: NextRequest) {
     );
   }
 }
-
