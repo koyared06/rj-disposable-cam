@@ -1125,6 +1125,15 @@ export default function CameraLandingPage() {
     if (Number.isNaN(value.getTime())) return null;
     return value;
   })();
+  const cameraEndsText = galleryUnlockAt
+    ? galleryUnlockAt.toLocaleString(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      })
+    : "TBA";
   const isGalleryLockedForViewer =
     !isAdminViewer &&
     Boolean(galleryUnlockAt && galleryUnlockAt.getTime() > Date.now());
@@ -1267,8 +1276,8 @@ export default function CameraLandingPage() {
           ) : null}
         </section>
       ) : (
-        <div className="mx-auto flex h-[100dvh] w-full max-w-md flex-col overflow-hidden">
-          <section className="relative h-full overflow-hidden bg-black sm:border sm:border-white/15">
+        <div className="flex h-[100dvh] w-full flex-col overflow-hidden">
+          <section className="relative h-full overflow-hidden bg-black">
             {cameraOpen ? (
               <video
                 ref={videoRef}
@@ -1316,19 +1325,22 @@ export default function CameraLandingPage() {
               </button>
             </div>
 
-            <div className="pointer-events-none absolute left-5 right-24 top-24 z-10 text-center">
-              <p className="truncate text-[2.35rem] font-semibold leading-none tracking-tight text-white drop-shadow-lg">
+            <div className="pointer-events-none absolute inset-x-0 top-20 z-10 px-6 text-center">
+              <p className="truncate text-[2.05rem] font-['Georgia'] font-semibold leading-none tracking-[0.03em] text-white drop-shadow-lg">
                 {settings.cameraEventTitle}
               </p>
-              <p className="mt-1 truncate text-sm text-white/75 drop-shadow">
-                {settings.cameraEventSubtitle}
+              <p className="mt-2 truncate text-sm font-semibold text-white/85 drop-shadow">
+                #soaferRED-ynasiJESS
+              </p>
+              <p className="mt-1 truncate text-xs text-white/70 drop-shadow">
+                Ends on {cameraEndsText}
               </p>
             </div>
-            <div className="pointer-events-none absolute inset-x-0 top-[11.6rem] z-10 px-6 text-center">
+            <div className="pointer-events-none absolute inset-x-0 top-[10.4rem] z-10 px-6 text-center">
               {feedback ? <p className="mt-1 text-xs text-amber-200">{feedback}</p> : null}
             </div>
 
-            <div className="absolute right-4 top-32 z-10 overflow-hidden rounded-[1.7rem] border border-white/20 bg-black/45 backdrop-blur-sm">
+            <div className="absolute right-4 top-40 z-10 overflow-hidden rounded-[1.7rem] border border-white/20 bg-black/45 backdrop-blur-sm">
               <button
                 type="button"
                 className="flex h-14 w-14 items-center justify-center border-b border-white/15 text-white/95"
@@ -1466,8 +1478,8 @@ export default function CameraLandingPage() {
               </div>
             ) : null}
 
-            <div className="absolute inset-x-0 bottom-0 z-10 px-4 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-              <div className="mx-auto max-w-sm">
+            <div className="absolute inset-x-0 bottom-0 z-10 px-3 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+              <div className="w-full">
                 <div className="mb-3 grid grid-cols-[auto_1fr_auto] items-center gap-2">
                   <div className="flex justify-start">
                     <button
@@ -1493,7 +1505,7 @@ export default function CameraLandingPage() {
                       <button
                         key={zoom}
                         type="button"
-                        className={`h-9 min-w-11 rounded-full px-3 text-sm font-semibold ${
+                        className={`h-9 w-12 rounded-full px-0 text-sm font-semibold ${
                           selectedZoom === zoom
                             ? "bg-white text-black"
                             : "text-white/90"
@@ -1528,58 +1540,52 @@ export default function CameraLandingPage() {
                   </div>
                 </div>
 
-                <div className="rounded-[2rem] bg-black/65 px-2.5 py-2.5 backdrop-blur-md">
-                  <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3">
-                    <div className="flex min-w-[8.5rem] items-center justify-start gap-2 pl-1 pr-2">
-                      <p className="text-[4rem] font-black italic leading-[0.82] text-white tabular-nums">
-                        {usage.shotsLimit > 0 ? (
-                          <RollingShotsValue value={effectiveShotsLeft ?? 0} />
-                        ) : (
-                          "∞"
-                        )}
-                      </p>
-                      <p className="text-[11px] font-black uppercase italic leading-[1.08] tracking-[0.08em] text-white/90">
-                        Shots Remaining
-                      </p>
-                    </div>
+                <div className="relative h-[6.3rem]">
+                  <div className="absolute bottom-1 left-0 z-10 flex items-end gap-2 pl-0.5">
+                    <p className="text-[4.1rem] font-black italic leading-[0.78] text-white tabular-nums">
+                      {usage.shotsLimit > 0 ? (
+                        <RollingShotsValue value={effectiveShotsLeft ?? 0} />
+                      ) : (
+                        "∞"
+                      )}
+                    </p>
+                    <p className="pb-1 text-[11px] font-black uppercase italic leading-[1.02] tracking-[0.06em] text-white/90">
+                      Shots Remaining
+                    </p>
+                  </div>
 
+                  <button
+                    type="button"
+                    className="absolute bottom-0 left-1/2 z-20 flex h-[5.4rem] w-[5.4rem] -translate-x-1/2 items-center justify-center rounded-full border-[2px] border-[#8a90ff] bg-white/10 shadow-[0_0_0_1px_rgba(255,255,255,0.35)_inset] disabled:opacity-40"
+                    onClick={() => void captureShot()}
+                    disabled={!cameraOpen || !canCaptureMoreShots || cameraTransitioning}
+                    aria-label="Capture shot"
+                  >
+                    <span className="h-[4.95rem] w-[4.95rem] rounded-full bg-white" />
+                  </button>
+
+                  <div className="absolute bottom-0 right-0 z-10 flex justify-end pr-0.5">
                     <button
                       type="button"
-                      className="flex h-[5.45rem] w-[5.45rem] items-center justify-center rounded-full border-[3px] border-[#8a90ff] bg-white/10 shadow-[0_0_0_1.5px_rgba(255,255,255,0.35)_inset] disabled:opacity-40"
-                      onClick={() => void captureShot()}
-                      disabled={
-                        !cameraOpen ||
-                        !canCaptureMoreShots ||
-                        cameraTransitioning
-                      }
-                      aria-label="Capture shot"
+                      className="relative h-20 w-20 shrink-0 overflow-hidden rounded-2xl border border-white/25 bg-black/35 shadow-xl"
+                      onClick={() => {
+                        setShowGallerySheet(true);
+                        setShowGalleryLockNotice(true);
+                      }}
+                      aria-label="Open gallery"
                     >
-                      <span className="h-[4.8rem] w-[4.8rem] rounded-full bg-white" />
+                      {latestLocalPreviewUrl ? (
+                        <img
+                          src={latestLocalPreviewUrl}
+                          alt="Latest shot preview"
+                          className={`h-full w-full object-cover transition duration-300 ${
+                            uploading ? "scale-105 blur-[2px] opacity-80" : ""
+                          }`}
+                        />
+                      ) : (
+                        <span className="relative inline-flex h-full w-full items-center justify-center"><span className="absolute h-10 w-8 translate-x-2 -translate-y-1 rotate-[12deg] rounded-md border border-white/25 bg-white/10" /><span className="absolute h-10 w-8 -translate-x-2 translate-y-1 rotate-[-9deg] rounded-md border border-white/20 bg-white/5" /><span className="absolute h-10 w-8 rounded-md border border-white/30 bg-white/15" /></span>
+                      )}
                     </button>
-
-                    <div className="flex min-w-[7.5rem] justify-end pr-1">
-                      <button
-                        type="button"
-                        className="relative h-20 w-20 shrink-0 overflow-hidden rounded-2xl border border-white/25 bg-black/35 shadow-xl"
-                        onClick={() => {
-                          setShowGallerySheet(true);
-                          setShowGalleryLockNotice(true);
-                        }}
-                        aria-label="Open gallery"
-                      >
-                        {latestLocalPreviewUrl ? (
-                          <img
-                            src={latestLocalPreviewUrl}
-                            alt="Latest shot preview"
-                            className={`h-full w-full object-cover transition duration-300 ${
-                              uploading ? "scale-105 blur-[2px] opacity-80" : ""
-                            }`}
-                          />
-                        ) : (
-                          <span className="relative inline-flex h-full w-full items-center justify-center"><span className="absolute h-10 w-8 translate-x-2 -translate-y-1 rotate-[12deg] rounded-md border border-white/25 bg-white/10" /><span className="absolute h-10 w-8 -translate-x-2 translate-y-1 rotate-[-9deg] rounded-md border border-white/20 bg-white/5" /><span className="absolute h-10 w-8 rounded-md border border-white/30 bg-white/15" /></span>
-                        )}
-                      </button>
-                    </div>
                   </div>
                 </div>
               </div>
@@ -1930,6 +1936,7 @@ export default function CameraLandingPage() {
     </main>
   );
 }
+
 
 
 
