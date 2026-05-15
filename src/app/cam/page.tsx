@@ -1116,6 +1116,7 @@ export default function CameraLandingPage() {
     Boolean(featuredGalleryItem) &&
     isGalleryLockedForViewer &&
     !featuredGalleryItem.isOwnPhoto;
+  const canExportGallery = !isGalleryLockedForViewer || isAdminViewer;
   const localShotsNewestFirst = [...localShots].sort(
     (a, b) => b.createdAt - a.createdAt,
   );
@@ -1606,14 +1607,16 @@ export default function CameraLandingPage() {
                       >
                         Add From Files
                       </button>
-                      <button
-                        type="button"
-                        className="rounded-full border border-white/25 bg-white/20 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
-                        onClick={() => void downloadFilteredGallery()}
-                        disabled={downloadingGallery || filteredGalleryItems.length === 0}
-                      >
-                        {downloadingGallery ? "Exporting..." : "Export"}
-                      </button>
+                      {canExportGallery ? (
+                        <button
+                          type="button"
+                          className="rounded-full border border-white/25 bg-white/20 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
+                          onClick={() => void downloadFilteredGallery()}
+                          disabled={downloadingGallery || filteredGalleryItems.length === 0}
+                        >
+                          {downloadingGallery ? "Exporting..." : "Export"}
+                        </button>
+                      ) : null}
                     </div>
                   </div>
                 </div>
