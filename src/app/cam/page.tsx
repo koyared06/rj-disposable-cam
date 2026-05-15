@@ -1285,14 +1285,14 @@ export default function CameraLandingPage() {
               {feedback ? <p className="mt-1 text-xs text-amber-200">{feedback}</p> : null}
             </div>
 
-            <div className="absolute right-3 top-1/2 z-10 flex -translate-y-1/2 flex-col gap-2">
+            <div className="absolute right-4 top-28 z-10 overflow-hidden rounded-[1.7rem] border border-white/20 bg-black/45 backdrop-blur-sm">
               <button
                 type="button"
-                className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/25 bg-black/55 text-white/95 backdrop-blur-sm"
+                className="flex h-14 w-14 items-center justify-center border-b border-white/15 text-white/95"
                 onClick={() => void openQrSheet()}
                 aria-label="Open QR share"
               >
-                <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
+                <svg viewBox="0 0 24 24" className="h-6 w-6" aria-hidden="true">
                   <path
                     d="M3 3h7v7H3V3zm11 0h7v7h-7V3zM3 14h7v7H3v-7zm13 2h2v2h-2v-2zm-2-2h2v2h-2v-2zm4 4h2v2h-2v-2zm-4 2h2v2h-2v-2zm4-10h3v3h-3v-3z"
                     fill="currentColor"
@@ -1301,12 +1301,12 @@ export default function CameraLandingPage() {
               </button>
               <button
                 type="button"
-                className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/25 bg-black/55 text-white/95 backdrop-blur-sm disabled:opacity-40"
+                className="flex h-14 w-14 items-center justify-center text-white/95 disabled:opacity-40"
                 onClick={() => void shareCameraLink()}
                 disabled={sharing}
                 aria-label="Share camera link"
               >
-                <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
+                <svg viewBox="0 0 24 24" className="h-6 w-6" aria-hidden="true">
                   <path
                     d="M14 3l7 7-7 7-1.4-1.4 4.6-4.6H8a5 5 0 000 10h3v2H8a7 7 0 010-14h9.2l-4.6-4.6L14 3z"
                     fill="currentColor"
@@ -1445,22 +1445,22 @@ export default function CameraLandingPage() {
                     </button>
                   </div>
 
-                  <div className="flex justify-center gap-2">
-                  {zoomOptions.map((zoom) => (
-                    <button
-                      key={zoom}
-                      type="button"
-                      className={`rounded-lg px-3 py-1 text-xs font-semibold ${
-                        selectedZoom === zoom
-                          ? "bg-white text-black"
-                          : "border border-white/30 bg-black/45 text-white"
-                      }`}
-                      onClick={() => void applyZoomLevel(zoom)}
-                      disabled={!cameraOpen || cameraTransitioning}
-                    >
-                      {zoom}x
-                    </button>
-                  ))}
+                  <div className="flex items-center rounded-full border border-white/25 bg-black/45 p-1">
+                    {zoomOptions.map((zoom) => (
+                      <button
+                        key={zoom}
+                        type="button"
+                        className={`h-9 min-w-11 rounded-full px-3 text-sm font-semibold ${
+                          selectedZoom === zoom
+                            ? "bg-white text-black"
+                            : "text-white/90"
+                        }`}
+                        onClick={() => void applyZoomLevel(zoom)}
+                        disabled={!cameraOpen || cameraTransitioning}
+                      >
+                        {zoom}x
+                      </button>
+                    ))}
                   </div>
 
                   <div className="flex justify-end">
@@ -1487,7 +1487,7 @@ export default function CameraLandingPage() {
 
                 <div className="rounded-[2rem] border border-white/20 bg-black/65 px-3 py-3 backdrop-blur-md">
                   <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3">
-                    <div className="flex min-w-[7.5rem] items-center justify-start gap-2 pr-2">
+                    <div className="flex min-w-[7.75rem] items-center justify-start gap-2 pr-2">
                       <p className="text-[4.35rem] font-black italic leading-[0.8] text-white tabular-nums">
                         {usage.shotsLimit > 0 ? (
                           <RollingShotsValue value={effectiveShotsLeft ?? 0} />
