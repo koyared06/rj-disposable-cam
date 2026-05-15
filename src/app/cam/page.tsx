@@ -1325,18 +1325,18 @@ export default function CameraLandingPage() {
               </button>
             </div>
 
-            <div className="pointer-events-none absolute inset-x-0 top-20 z-10 px-6 text-center">
-              <p className="truncate text-[2.05rem] font-['Georgia'] font-semibold leading-none tracking-[0.03em] text-white drop-shadow-lg">
+            <div className="pointer-events-none absolute inset-x-0 top-16 z-10 px-6 text-center">
+              <p className="truncate text-[2.2rem] font-['Cormorant_Garamond'] font-semibold leading-none tracking-[0.02em] text-white drop-shadow-lg">
                 {settings.cameraEventTitle}
               </p>
-              <p className="mt-2 truncate text-sm font-semibold text-white/85 drop-shadow">
+              <p className="mt-1 truncate text-[1.85rem] font-['Cormorant_Garamond'] italic leading-none text-white/90 drop-shadow">
                 #soaferRED-ynasiJESS
               </p>
-              <p className="mt-1 truncate text-xs text-white/70 drop-shadow">
+              <p className="mt-1 truncate text-xs font-medium text-white/70 drop-shadow">
                 Ends on {cameraEndsText}
               </p>
             </div>
-            <div className="pointer-events-none absolute inset-x-0 top-[10.4rem] z-10 px-6 text-center">
+            <div className="pointer-events-none absolute inset-x-0 top-[9.55rem] z-10 px-6 text-center">
               {feedback ? <p className="mt-1 text-xs text-amber-200">{feedback}</p> : null}
             </div>
 
@@ -1540,18 +1540,23 @@ export default function CameraLandingPage() {
                   </div>
                 </div>
 
-                <div className="relative h-[6.3rem]">
+                <div className="relative h-[6.2rem]">
                   <div className="absolute bottom-1 left-0 z-10 flex items-end gap-2 pl-0.5">
-                    <p className="text-[4.1rem] font-black italic leading-[0.78] text-white tabular-nums">
+                    <p className="text-[3.65rem] font-black italic leading-[0.84] text-white tabular-nums">
                       {usage.shotsLimit > 0 ? (
                         <RollingShotsValue value={effectiveShotsLeft ?? 0} />
                       ) : (
                         "∞"
                       )}
                     </p>
-                    <p className="pb-1 text-[11px] font-black uppercase italic leading-[1.02] tracking-[0.06em] text-white/90">
-                      Shots Remaining
-                    </p>
+                    <div className="pb-1 leading-none">
+                      <p className="text-[13px] font-black uppercase italic tracking-[0.05em] text-white/92">
+                        Shots
+                      </p>
+                      <p className="mt-0.5 text-[9px] font-semibold uppercase italic tracking-[0.11em] text-white/78">
+                        Remaining
+                      </p>
+                    </div>
                   </div>
 
                   <button
