@@ -43,6 +43,10 @@ export function getCameraPhotosSheetName() {
   return process.env.GOOGLE_SHEETS_CAMERA_PHOTOS_TAB ?? "CameraPhotos";
 }
 
+export function getCameraQrSessionsSheetName() {
+  return process.env.GOOGLE_SHEETS_CAMERA_QR_SESSIONS_TAB ?? "CameraQrSessions";
+}
+
 export function getDriveCameraEnv() {
   const primaryCameraFolderId = (process.env.GOOGLE_DRIVE_CAMERA_FOLDER_ID ?? "").trim();
   const legacyCameraFolderId = (process.env.GOOGLE_DRIVE_FOLDER_ID ?? "").trim();

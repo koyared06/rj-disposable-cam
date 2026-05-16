@@ -7,6 +7,7 @@ import {
 } from "@/lib/sheet-models";
 import {
   appendRow,
+  deleteRow,
   ensureSheetWithHeaders,
   readRows,
   updateRow,
@@ -91,4 +92,9 @@ export async function updateCameraPhoto(
 ) {
   await ensureCameraPhotosSheet();
   await updateRow(getCameraPhotosSheetName(), rowNumber, cameraPhotoToArray(photo));
+}
+
+export async function deleteCameraPhotoRow(rowNumber: number) {
+  await ensureCameraPhotosSheet();
+  await deleteRow(getCameraPhotosSheetName(), rowNumber);
 }

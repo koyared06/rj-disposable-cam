@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { appendCameraPhoto, countCameraPhotosByInvite } from "@/lib/camera-photos";
+import { isCameraQrTokenRevoked } from "@/lib/camera-qr-sessions";
 import { processCameraImage } from "@/lib/camera-image";
 import { resolveCameraVisibilityAt } from "@/lib/camera-visibility";
 import { buildCameraUploaderCode, verifyCameraQrToken } from "@/lib/camera-qr";
@@ -49,10 +50,13 @@ function classifyUploadFailure(error: unknown) {
     };
   }
 
-  if (message.includes("CAMERA_WATERMARK_PROCESSING_FAILED")) {
+  if (
+    message.includes("CAMERA_WATERMARK_PROCESSING_FAILED") ||
+    message.includes("CAMERA_IMAGE_PROCESSING_FAILED")
+  ) {
     return {
-      code: "WATERMARK_PROCESSING_FAILED",
-      hint: "Watermark processing failed. Check image format support and Vercel function logs.",
+      code: "IMAGE_PROCESSING_FAILED",
+      hint: "Image processing failed. Check image format support and Vercel function logs.",
     };
   }
 
@@ -165,6 +169,10 @@ export async function POST(request: Request) {
           { error: "Invalid camera session for upload." },
           { status: 401 },
         );
+      }
+
+      if (await isCameraQrTokenRevoked(cameraToken)) {
+        return NextResponse.json({ error: "This camera QR has been revoked." }, { status: 401 });
       }
 
       actorCode = buildCameraUploaderCode(verified, deviceId);

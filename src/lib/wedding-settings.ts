@@ -20,12 +20,19 @@ const CAMERA_EVENT_TITLE_KEY = "cameraEventTitle";
 const CAMERA_EVENT_SUBTITLE_KEY = "cameraEventSubtitle";
 const CAMERA_COVER_IMAGE_URL_KEY = "cameraCoverImageUrl";
 const CAMERA_START_BUTTON_LABEL_KEY = "cameraStartButtonLabel";
+const CAMERA_LAST_QR_EVENT_ID_KEY = "cameraLastQrEventId";
+const CAMERA_LAST_QR_TABLE_CODE_KEY = "cameraLastQrTableCode";
+const CAMERA_LAST_QR_URL_KEY = "cameraLastQrUrl";
+const CAMERA_LAST_QR_EXPIRES_AT_KEY = "cameraLastQrExpiresAt";
+const CAMERA_LAST_QR_EXPIRES_IN_HOURS_KEY = "cameraLastQrExpiresInHours";
+const CAMERA_LAST_QR_GENERATED_AT_KEY = "cameraLastQrGeneratedAt";
 const DEFAULT_WEDDING_TIME = "16:00";
 const DEFAULT_CAMERA_MAX_UPLOAD_MB = 3;
 const DEFAULT_CAMERA_SHOT_LIMIT = 27;
 const DEFAULT_CAMERA_EVENT_TITLE = "Guest Camera";
 const DEFAULT_CAMERA_EVENT_SUBTITLE = "Capture moments from our celebration.";
 const DEFAULT_CAMERA_START_BUTTON_LABEL = "Start Camera";
+const DEFAULT_CAMERA_QR_EXPIRY_HOURS = 48;
 
 export type WeddingSettings = {
   weddingDate: string;
@@ -42,6 +49,12 @@ export type WeddingSettings = {
   cameraEventSubtitle: string;
   cameraCoverImageUrl: string;
   cameraStartButtonLabel: string;
+  cameraLastQrEventId: string;
+  cameraLastQrTableCode: string;
+  cameraLastQrUrl: string;
+  cameraLastQrExpiresAt: string;
+  cameraLastQrExpiresInHours: number;
+  cameraLastQrGeneratedAt: string;
 };
 
 function isMissingSheetError(error: unknown) {
@@ -62,6 +75,27 @@ export async function readWeddingSettings(): Promise<WeddingSettings> {
         .filter((row) => (row[0] ?? "").trim())
         .map((row) => [(row[0] ?? "").trim(), (row[1] ?? "").trim()]),
     );
+
+    const cameraLastQrEventId = parseCameraSessionText(
+      normalized.get(CAMERA_LAST_QR_EVENT_ID_KEY) ?? "",
+      60,
+    );
+    const cameraLastQrTableCode = parseCameraSessionText(
+      normalized.get(CAMERA_LAST_QR_TABLE_CODE_KEY) ?? "",
+      60,
+    );
+    const cameraLastQrUrl = parseCameraUrl(normalized.get(CAMERA_LAST_QR_URL_KEY) ?? "");
+    const cameraLastQrExpiresAt = normalizeIsoDateTime(
+      normalized.get(CAMERA_LAST_QR_EXPIRES_AT_KEY) ?? "",
+    );
+    const cameraLastQrGeneratedAt = normalizeIsoDateTime(
+      normalized.get(CAMERA_LAST_QR_GENERATED_AT_KEY) ?? "",
+    );
+    const cameraLastQrExpiresInHours = parseCameraQrExpiryHours(
+      normalized.get(CAMERA_LAST_QR_EXPIRES_IN_HOURS_KEY) ?? "",
+    );
+    const isQrExpired =
+      cameraLastQrExpiresAt && Date.parse(cameraLastQrExpiresAt) <= Date.now();
 
     return {
       weddingDate: normalized.get(WEDDING_DATE_KEY) ?? "",
@@ -104,6 +138,14 @@ export async function readWeddingSettings(): Promise<WeddingSettings> {
         DEFAULT_CAMERA_START_BUTTON_LABEL,
         40,
       ),
+      cameraLastQrEventId: isQrExpired ? "" : cameraLastQrEventId,
+      cameraLastQrTableCode: isQrExpired ? "" : cameraLastQrTableCode,
+      cameraLastQrUrl: isQrExpired ? "" : cameraLastQrUrl,
+      cameraLastQrExpiresAt: isQrExpired ? "" : cameraLastQrExpiresAt,
+      cameraLastQrExpiresInHours: isQrExpired
+        ? DEFAULT_CAMERA_QR_EXPIRY_HOURS
+        : cameraLastQrExpiresInHours,
+      cameraLastQrGeneratedAt: isQrExpired ? "" : cameraLastQrGeneratedAt,
     };
   } catch (error) {
     if (isMissingSheetError(error)) {
@@ -122,6 +164,12 @@ export async function readWeddingSettings(): Promise<WeddingSettings> {
         cameraEventSubtitle: DEFAULT_CAMERA_EVENT_SUBTITLE,
         cameraCoverImageUrl: "",
         cameraStartButtonLabel: DEFAULT_CAMERA_START_BUTTON_LABEL,
+        cameraLastQrEventId: "",
+        cameraLastQrTableCode: "",
+        cameraLastQrUrl: "",
+        cameraLastQrExpiresAt: "",
+        cameraLastQrExpiresInHours: DEFAULT_CAMERA_QR_EXPIRY_HOURS,
+        cameraLastQrGeneratedAt: "",
       };
     }
     throw error;
@@ -182,6 +230,27 @@ export async function saveWeddingSettings(settings: WeddingSettings) {
         DEFAULT_CAMERA_START_BUTTON_LABEL,
         40,
       ),
+    ],
+    [
+      CAMERA_LAST_QR_EVENT_ID_KEY,
+      parseCameraSessionText(settings.cameraLastQrEventId, 60),
+    ],
+    [
+      CAMERA_LAST_QR_TABLE_CODE_KEY,
+      parseCameraSessionText(settings.cameraLastQrTableCode, 60),
+    ],
+    [CAMERA_LAST_QR_URL_KEY, parseCameraUrl(settings.cameraLastQrUrl)],
+    [
+      CAMERA_LAST_QR_EXPIRES_AT_KEY,
+      normalizeIsoDateTime(settings.cameraLastQrExpiresAt),
+    ],
+    [
+      CAMERA_LAST_QR_EXPIRES_IN_HOURS_KEY,
+      String(parseCameraQrExpiryHours(String(settings.cameraLastQrExpiresInHours))),
+    ],
+    [
+      CAMERA_LAST_QR_GENERATED_AT_KEY,
+      normalizeIsoDateTime(settings.cameraLastQrGeneratedAt),
     ],
   ];
   // Use a single range write to avoid many per-row API calls that can hit quota limits.
@@ -262,6 +331,27 @@ function parseCameraUrl(value: string): string {
   } catch {
     return "";
   }
+}
+
+function parseCameraSessionText(value: string, maxLength: number): string {
+  return (value ?? "").trim().slice(0, maxLength);
+}
+
+function parseCameraQrExpiryHours(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_CAMERA_QR_EXPIRY_HOURS;
+  }
+
+  const normalized = Math.round(parsed);
+  return Math.min(720, Math.max(1, normalized));
+}
+
+function normalizeIsoDateTime(value: string): string {
+  if (!value) return "";
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) return "";
+  return new Date(time).toISOString();
 }
 
 function parseIsoDate(isoDate: string) {

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { findCameraPhotoById } from "@/lib/camera-photos";
 import { isPhotoVisibleNow } from "@/lib/camera-visibility";
+import { isCameraQrTokenRevoked } from "@/lib/camera-qr-sessions";
 import { buildCameraUploaderCode, verifyCameraQrToken } from "@/lib/camera-qr";
 import { downloadDriveFile } from "@/lib/drive-camera";
 import { findGuestByInviteCredentials } from "@/lib/guest-access";
@@ -8,6 +9,45 @@ import { validateAdmin } from "@/lib/admin-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+function normalizeDriveFileId(rawValue: string) {
+  const value = rawValue.trim();
+  if (!value) return "";
+
+  if (/^[a-zA-Z0-9_-]{10,}$/.test(value)) {
+    return value;
+  }
+
+  try {
+    const parsed = new URL(value);
+    const idFromQuery = parsed.searchParams.get("id")?.trim();
+    if (idFromQuery && /^[a-zA-Z0-9_-]{10,}$/.test(idFromQuery)) {
+      return idFromQuery;
+    }
+
+    const pathMatch = parsed.pathname.match(/\/d\/([a-zA-Z0-9_-]{10,})/);
+    if (pathMatch?.[1]) {
+      return pathMatch[1];
+    }
+  } catch {
+    // Ignore parse errors and fallback to empty.
+  }
+
+  return "";
+}
+
+function buildDriveFileCandidates(previewDriveFileId: string, driveFileId: string) {
+  const candidates: string[] = [];
+  const pushUnique = (value: string) => {
+    if (!value) return;
+    if (candidates.includes(value)) return;
+    candidates.push(value);
+  };
+
+  pushUnique(normalizeDriveFileId(previewDriveFileId));
+  pushUnique(normalizeDriveFileId(driveFileId));
+  return candidates;
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -30,6 +70,9 @@ export async function GET(request: NextRequest) {
       const cameraToken = (request.nextUrl.searchParams.get("t") ?? "").trim();
       const deviceId = (request.nextUrl.searchParams.get("device") ?? "").trim();
       const verifiedQr = verifyCameraQrToken(cameraToken, eventId);
+      if (verifiedQr && (await isCameraQrTokenRevoked(cameraToken))) {
+        return NextResponse.json({ error: "This camera QR has been revoked." }, { status: 401 });
+      }
       const ownCodeFromQr =
         verifiedQr && deviceId ? buildCameraUploaderCode(verifiedQr, deviceId) : "";
       const ownCode = guest?.inviteCode ?? ownCodeFromQr;
@@ -53,8 +96,36 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    const driveFileId = photo.previewDriveFileId || photo.driveFileId;
-    const bytes = await downloadDriveFile(driveFileId);
+    const fileIdCandidates = buildDriveFileCandidates(
+      photo.previewDriveFileId,
+      photo.driveFileId,
+    );
+    if (fileIdCandidates.length < 1) {
+      return NextResponse.json({ error: "Photo file reference is missing." }, { status: 404 });
+    }
+
+    let bytes: Buffer | null = null;
+    let lastError: unknown = null;
+    for (const driveFileId of fileIdCandidates) {
+      try {
+        bytes = await downloadDriveFile(driveFileId);
+        break;
+      } catch (candidateError) {
+        lastError = candidateError;
+      }
+    }
+
+    if (!bytes) {
+      console.warn("Camera file download failed for all candidates.", {
+        photoId: photo.id,
+        fileIdCandidates,
+      });
+      if (lastError instanceof Error && /404/.test(lastError.message)) {
+        return NextResponse.json({ error: "Photo file no longer exists." }, { status: 404 });
+      }
+      throw lastError ?? new Error("Unable to download any camera file candidate.");
+    }
+
     const body = new Uint8Array(bytes);
 
     return new Response(body, {

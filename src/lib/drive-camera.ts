@@ -256,3 +256,14 @@ export async function downloadDriveFile(fileId: string): Promise<Buffer> {
 
   return Buffer.from(payload as Uint8Array);
 }
+
+export async function deleteDriveFile(fileId: string) {
+  const normalizedId = fileId.trim();
+  if (!normalizedId) return;
+
+  const drive = getDriveClient();
+  await drive.files.delete({
+    fileId: normalizedId,
+    supportsAllDrives: true,
+  });
+}

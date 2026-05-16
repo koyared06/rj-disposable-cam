@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { readCameraPhotos } from "@/lib/camera-photos";
 import { isPhotoVisibleNow } from "@/lib/camera-visibility";
+import { isCameraQrTokenRevoked } from "@/lib/camera-qr-sessions";
 import { buildCameraUploaderCode, verifyCameraQrToken } from "@/lib/camera-qr";
 import { findGuestByInviteCredentials } from "@/lib/guest-access";
 import { validateAdmin } from "@/lib/admin-auth";
@@ -36,6 +37,9 @@ export async function GET(request: NextRequest) {
       ? null
       : await findGuestByInviteCredentials(inviteCode, inviteToken);
     const verifiedQr = isAdmin ? null : verifyCameraQrToken(cameraToken, eventId);
+    if (!isAdmin && verifiedQr && (await isCameraQrTokenRevoked(cameraToken))) {
+      return NextResponse.json({ error: "This camera QR has been revoked." }, { status: 401 });
+    }
     const ownCodeFromQr =
       verifiedQr && deviceId ? buildCameraUploaderCode(verifiedQr, deviceId) : "";
     const ownCode = guest?.inviteCode ?? ownCodeFromQr;

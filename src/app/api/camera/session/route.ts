@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyCameraQrToken } from "@/lib/camera-qr";
+import { isCameraQrTokenRevoked } from "@/lib/camera-qr-sessions";
 import { normalizeCameraCoverUrl } from "@/lib/camera-cover";
 import { readWeddingSettings } from "@/lib/wedding-settings";
 
@@ -20,6 +21,10 @@ export async function GET(request: NextRequest) {
     const verified = verifyCameraQrToken(token, eventId);
     if (!verified) {
       return NextResponse.json({ error: "Invalid or expired camera QR." }, { status: 401 });
+    }
+
+    if (await isCameraQrTokenRevoked(token)) {
+      return NextResponse.json({ error: "This camera QR has been revoked." }, { status: 401 });
     }
 
     const settings = await readWeddingSettings();

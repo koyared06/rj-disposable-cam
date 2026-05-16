@@ -34,6 +34,12 @@ export async function GET(request: NextRequest) {
         cameraEventSubtitle: settings.cameraEventSubtitle,
         cameraCoverImageUrl: normalizedCoverUrl,
         cameraStartButtonLabel: settings.cameraStartButtonLabel,
+        cameraLastQrEventId: settings.cameraLastQrEventId,
+        cameraLastQrTableCode: settings.cameraLastQrTableCode,
+        cameraLastQrUrl: settings.cameraLastQrUrl,
+        cameraLastQrExpiresAt: settings.cameraLastQrExpiresAt,
+        cameraLastQrExpiresInHours: settings.cameraLastQrExpiresInHours,
+        cameraLastQrGeneratedAt: settings.cameraLastQrGeneratedAt,
         weddingDate: settings.weddingDate,
         weddingTime: settings.weddingTime,
         showCountdown: settings.showCountdown,
@@ -106,6 +112,12 @@ export async function PATCH(request: NextRequest) {
       cameraStartButtonLabel:
         parsed.data.cameraStartButtonLabel ??
         currentSettings.cameraStartButtonLabel,
+      cameraLastQrEventId: currentSettings.cameraLastQrEventId,
+      cameraLastQrTableCode: currentSettings.cameraLastQrTableCode,
+      cameraLastQrUrl: currentSettings.cameraLastQrUrl,
+      cameraLastQrExpiresAt: currentSettings.cameraLastQrExpiresAt,
+      cameraLastQrExpiresInHours: currentSettings.cameraLastQrExpiresInHours,
+      cameraLastQrGeneratedAt: currentSettings.cameraLastQrGeneratedAt,
     });
 
     const updated = await readWeddingSettings();
@@ -123,6 +135,12 @@ export async function PATCH(request: NextRequest) {
         cameraEventSubtitle: updated.cameraEventSubtitle,
         cameraCoverImageUrl: updated.cameraCoverImageUrl,
         cameraStartButtonLabel: updated.cameraStartButtonLabel,
+        cameraLastQrEventId: updated.cameraLastQrEventId,
+        cameraLastQrTableCode: updated.cameraLastQrTableCode,
+        cameraLastQrUrl: updated.cameraLastQrUrl,
+        cameraLastQrExpiresAt: updated.cameraLastQrExpiresAt,
+        cameraLastQrExpiresInHours: updated.cameraLastQrExpiresInHours,
+        cameraLastQrGeneratedAt: updated.cameraLastQrGeneratedAt,
         weddingDate: updated.weddingDate,
         weddingTime: updated.weddingTime,
         showCountdown: updated.showCountdown,

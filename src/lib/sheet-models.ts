@@ -46,6 +46,18 @@ export type CameraPhotoRow = {
   hiddenAt: string;
 };
 
+export type CameraQrSessionRow = {
+  rowNumber: number;
+  id: string;
+  createdAt: string;
+  eventId: string;
+  tableCode: string;
+  expiresAt: string;
+  url: string;
+  token: string;
+  revokedAt: string;
+};
+
 export type EntourageSide = "bride" | "groom" | "none";
 
 export type EntourageCategoryRow = {
@@ -200,6 +212,20 @@ export function toCameraPhotoRow(row: string[], rowNumber: number): CameraPhotoR
   };
 }
 
+export function toCameraQrSessionRow(row: string[], rowNumber: number): CameraQrSessionRow {
+  return {
+    rowNumber,
+    id: cell(row, 0),
+    createdAt: cell(row, 1),
+    eventId: cell(row, 2),
+    tableCode: cell(row, 3),
+    expiresAt: cell(row, 4),
+    url: cell(row, 5),
+    token: cell(row, 6),
+    revokedAt: cell(row, 7),
+  };
+}
+
 export function guestToArray(guest: Omit<GuestRow, "rowNumber">): string[] {
   return [
     guest.id,
@@ -230,6 +256,21 @@ export function cameraPhotoToArray(photo: Omit<CameraPhotoRow, "rowNumber">): st
     photo.visibilityAt,
     photo.rejectionReason,
     photo.hiddenAt,
+  ];
+}
+
+export function cameraQrSessionToArray(
+  session: Omit<CameraQrSessionRow, "rowNumber">,
+): string[] {
+  return [
+    session.id,
+    session.createdAt,
+    session.eventId,
+    session.tableCode,
+    session.expiresAt,
+    session.url,
+    session.token,
+    session.revokedAt,
   ];
 }
 

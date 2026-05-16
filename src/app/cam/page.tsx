@@ -46,6 +46,9 @@ type CameraFacing = "environment" | "user";
 type GalleryFilterMode = "all" | "mine" | "capturer";
 
 const ADMIN_SESSION_KEY = "rj_admin_session_v1";
+const MANILA_TIMEZONE = "Asia/Manila";
+const LOCAL_SHOTS_DB_NAME = "rj-camera-local-shots-v1";
+const LOCAL_SHOTS_STORE_NAME = "shots";
 
 const DEFAULT_SETTINGS: CameraSessionSettings = {
   cameraEnabled: false,
@@ -91,18 +94,110 @@ function resolveGalleryUnlockMessage(settings: CameraSessionSettings) {
   const unlockAt = new Date(iso);
   if (Number.isNaN(unlockAt.getTime())) return "";
 
-  const formatted = unlockAt.toLocaleString(undefined, {
+  const formatted = unlockAt.toLocaleString("en-PH", {
     year: "numeric",
     month: "short",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    timeZone: MANILA_TIMEZONE,
   });
 
   if (unlockAt.getTime() <= Date.now()) {
     return `Gallery unlock is active since ${formatted}.`;
   }
   return `Gallery photos unlock on ${formatted}.`;
+}
+
+function formatManilaDateTime(value: string) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString("en-PH", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: MANILA_TIMEZONE,
+  });
+}
+
+type PersistedLocalShot = {
+  id: string;
+  scope: string;
+  fileName: string;
+  fileType: string;
+  blob: Blob;
+  selected: boolean;
+  status: LocalShotStatus;
+  createdAt: number;
+};
+
+function buildLocalShotScope(eventId: string, deviceId: string) {
+  return `${eventId}::${deviceId}`;
+}
+
+function openLocalShotsDb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = window.indexedDB.open(LOCAL_SHOTS_DB_NAME, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(LOCAL_SHOTS_STORE_NAME)) {
+        const store = db.createObjectStore(LOCAL_SHOTS_STORE_NAME, { keyPath: "id" });
+        store.createIndex("scope", "scope", { unique: false });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? new Error("Unable to open local shots DB."));
+  });
+}
+
+async function listPersistedLocalShotsByScope(scope: string): Promise<PersistedLocalShot[]> {
+  if (typeof window === "undefined" || !window.indexedDB) return [];
+  const db = await openLocalShotsDb();
+  try {
+    return await new Promise<PersistedLocalShot[]>((resolve, reject) => {
+      const tx = db.transaction(LOCAL_SHOTS_STORE_NAME, "readonly");
+      const store = tx.objectStore(LOCAL_SHOTS_STORE_NAME);
+      const index = store.index("scope");
+      const request = index.getAll(scope);
+      request.onsuccess = () => resolve((request.result ?? []) as PersistedLocalShot[]);
+      request.onerror = () =>
+        reject(request.error ?? new Error("Unable to read local persisted shots."));
+    });
+  } finally {
+    db.close();
+  }
+}
+
+async function putPersistedLocalShot(row: PersistedLocalShot) {
+  if (typeof window === "undefined" || !window.indexedDB) return;
+  const db = await openLocalShotsDb();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(LOCAL_SHOTS_STORE_NAME, "readwrite");
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error ?? new Error("Unable to save local shot."));
+      tx.objectStore(LOCAL_SHOTS_STORE_NAME).put(row);
+    });
+  } finally {
+    db.close();
+  }
+}
+
+async function deletePersistedLocalShot(id: string) {
+  if (typeof window === "undefined" || !window.indexedDB) return;
+  const db = await openLocalShotsDb();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(LOCAL_SHOTS_STORE_NAME, "readwrite");
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error ?? new Error("Unable to delete local shot."));
+      tx.objectStore(LOCAL_SHOTS_STORE_NAME).delete(id);
+    });
+  } finally {
+    db.close();
+  }
 }
 
 function trackSupportsTorch(track: MediaStreamTrack | null | undefined) {
@@ -176,6 +271,13 @@ export default function CameraLandingPage() {
   const [cameraPermissionFailed, setCameraPermissionFailed] = useState(false);
   const [showGallerySheet, setShowGallerySheet] = useState(false);
   const [showGalleryLockNotice, setShowGalleryLockNotice] = useState(true);
+  const [expandedGalleryImage, setExpandedGalleryImage] = useState<{
+    imageUrl: string;
+    uploaderName: string;
+    createdAt: string;
+    blur: boolean;
+  } | null>(null);
+  const [activeLocalShotId, setActiveLocalShotId] = useState("");
   const [galleryFilterMode, setGalleryFilterMode] = useState<GalleryFilterMode>("all");
   const [selectedCapturer, setSelectedCapturer] = useState("");
   const [downloadingGallery, setDownloadingGallery] = useState(false);
@@ -196,6 +298,7 @@ export default function CameraLandingPage() {
   const [started, setStarted] = useState(false);
   const [loading, setLoading] = useState(true);
   const [localShots, setLocalShots] = useState<LocalShot[]>([]);
+  const [localShotsReadyScope, setLocalShotsReadyScope] = useState("");
   const [uploading, setUploading] = useState(false);
   const [uploadedShotsCount, setUploadedShotsCount] = useState(0);
   const [uploadBatchTotal, setUploadBatchTotal] = useState(0);
@@ -215,6 +318,7 @@ export default function CameraLandingPage() {
   const localShotsRef = useRef<LocalShot[]>([]);
   const queueProcessingRef = useRef(false);
   const mountedRef = useRef(true);
+  const localShotsScopeRef = useRef("");
 
   const pendingUploads = localShots.filter(
     (shot) => shot.status === "queued" || shot.status === "uploading",
@@ -267,6 +371,8 @@ export default function CameraLandingPage() {
     stopCamera(true);
     setStarted(false);
     setShowGallerySheet(false);
+    setExpandedGalleryImage(null);
+    setActiveLocalShotId("");
     setShowQrSheet(false);
   }, [stopCamera]);
 
@@ -490,6 +596,101 @@ export default function CameraLandingPage() {
   }, []);
 
   useEffect(() => {
+    if (!eventId || !deviceId) return;
+    let cancelled = false;
+    const scope = buildLocalShotScope(eventId, deviceId);
+    localShotsScopeRef.current = scope;
+
+    const hydrate = async () => {
+      try {
+        const persisted = await listPersistedLocalShotsByScope(scope);
+        if (cancelled) return;
+        const restored = persisted
+          .sort((a, b) => a.createdAt - b.createdAt)
+          .map((entry) => {
+            const file = new File([entry.blob], entry.fileName || `cam-${entry.id}.jpg`, {
+              type: entry.fileType || "image/jpeg",
+            });
+            const previewUrl = URL.createObjectURL(entry.blob);
+            const status: LocalShotStatus =
+              entry.status === "queued" || entry.status === "uploading"
+                ? "draft"
+                : entry.status;
+            return {
+              id: entry.id,
+              file,
+              previewUrl,
+              selected: entry.selected,
+              status,
+              createdAt: entry.createdAt,
+            } satisfies LocalShot;
+          });
+        setLocalShots((current) => {
+          current.forEach((shot) => URL.revokeObjectURL(shot.previewUrl));
+          return restored;
+        });
+      } catch {
+        // Ignore local persistence load errors and continue with empty in-memory queue.
+      } finally {
+        if (!cancelled) {
+          setLocalShotsReadyScope(scope);
+        }
+      }
+    };
+
+    void hydrate();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [deviceId, eventId]);
+
+  useEffect(() => {
+    const scope = localShotsScopeRef.current;
+    if (!scope) return;
+    if (localShotsReadyScope !== scope) return;
+    let cancelled = false;
+
+    const sync = async () => {
+      try {
+        const existing = await listPersistedLocalShotsByScope(scope);
+        const nextIds = new Set(localShots.map((shot) => shot.id));
+
+        for (const stale of existing) {
+          if (!nextIds.has(stale.id)) {
+            await deletePersistedLocalShot(stale.id);
+          }
+        }
+
+        for (const shot of localShots) {
+          const persistedStatus: LocalShotStatus =
+            shot.status === "uploading" ? "queued" : shot.status;
+          await putPersistedLocalShot({
+            id: shot.id,
+            scope,
+            fileName: shot.file.name || `cam-${shot.id}.jpg`,
+            fileType: shot.file.type || "image/jpeg",
+            blob: shot.file,
+            selected: shot.selected,
+            status: persistedStatus,
+            createdAt: shot.createdAt,
+          });
+        }
+      } catch {
+        if (!cancelled) {
+          // Ignore sync errors to avoid disrupting camera flow.
+        }
+      }
+    };
+
+    void sync();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [localShots, localShotsReadyScope]);
+
+  useEffect(() => {
     if (uploading || queueProcessingRef.current) return;
     const nextQueuedShot = localShots.find((shot) => shot.status === "queued");
     if (!nextQueuedShot) return;
@@ -647,6 +848,9 @@ export default function CameraLandingPage() {
       }
       return current.filter((shot) => shot.id !== id);
     });
+    if (activeLocalShotId === id) {
+      setActiveLocalShotId("");
+    }
   }
 
   function queueSelectedShotsForUpload() {
@@ -666,6 +870,30 @@ export default function CameraLandingPage() {
     setUploadBatchTotal(targetCount);
     setUploadBatchDone(0);
     setFeedback("");
+  }
+
+  function queueSingleShotForUpload(id: string) {
+    let queued = false;
+    setLocalShots((current) =>
+      current.map((shot) => {
+        if (shot.id !== id) return shot;
+        if (shot.status === "draft" || shot.status === "failed") {
+          queued = true;
+          return { ...shot, selected: true, status: "queued" };
+        }
+        return shot;
+      }),
+    );
+
+    if (!queued) {
+      setFeedback("This shot is already queued or uploading.");
+      return;
+    }
+
+    setUploadBatchTotal(1);
+    setUploadBatchDone(0);
+    setFeedback("");
+    setActiveLocalShotId("");
   }
 
   function retryFailedShots() {
@@ -1126,12 +1354,23 @@ export default function CameraLandingPage() {
     return value;
   })();
   const cameraEndsText = galleryUnlockAt
-    ? galleryUnlockAt.toLocaleString(undefined, {
+    ? galleryUnlockAt.toLocaleString("en-PH", {
         year: "numeric",
         month: "short",
         day: "numeric",
         hour: "numeric",
         minute: "2-digit",
+        timeZone: MANILA_TIMEZONE,
+      })
+    : "TBA";
+  const galleryRevealAtText = galleryUnlockAt
+    ? galleryUnlockAt.toLocaleString("en-PH", {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        timeZone: MANILA_TIMEZONE,
       })
     : "TBA";
   const isGalleryLockedForViewer =
@@ -1165,13 +1404,15 @@ export default function CameraLandingPage() {
   })();
   const featuredGalleryItem = filteredGalleryItems[0] ?? null;
   const shouldBlurFeaturedGalleryItem =
-    Boolean(featuredGalleryItem) &&
-    isGalleryLockedForViewer &&
-    !featuredGalleryItem.isOwnPhoto;
+    Boolean(featuredGalleryItem) && isGalleryLockedForViewer;
   const canExportGallery = !isGalleryLockedForViewer || isAdminViewer;
   const localShotsNewestFirst = [...localShots].sort(
     (a, b) => b.createdAt - a.createdAt,
   );
+  const activeLocalShot =
+    activeLocalShotId
+      ? localShots.find((shot) => shot.id === activeLocalShotId) ?? null
+      : null;
   const isGuestNameModalVisible =
     showGuestNameModal || (!showLandingScreen && !normalizedGuestName);
 
@@ -1325,18 +1566,24 @@ export default function CameraLandingPage() {
               </button>
             </div>
 
-            <div className="pointer-events-none absolute inset-x-0 top-16 z-10 px-6 text-center">
-              <p className="truncate text-[2.2rem] font-['Cormorant_Garamond'] font-semibold leading-none tracking-[0.02em] text-white drop-shadow-lg">
+            <div className="pointer-events-none absolute inset-x-0 top-12 z-10 px-6 text-center">
+              <p
+                className="text-[2.25rem] leading-[1.15] tracking-[0.01em] text-white drop-shadow-lg"
+                style={{ fontFamily: "'Great Vibes', var(--font-script), 'Times New Roman', serif" }}
+              >
                 {settings.cameraEventTitle}
               </p>
-              <p className="mt-1 truncate text-[1.85rem] font-['Cormorant_Garamond'] italic leading-none text-white/90 drop-shadow">
+              <p
+                className="mt-1 text-[1.75rem] italic leading-[1.1] text-white/90 drop-shadow"
+                style={{ fontFamily: "var(--font-display), 'Times New Roman', serif" }}
+              >
                 #soaferRED-ynasiJESS
               </p>
-              <p className="mt-1 truncate text-xs font-medium text-white/70 drop-shadow">
+              <p className="mt-1 text-xs font-medium text-white/70 drop-shadow">
                 Ends on {cameraEndsText}
               </p>
             </div>
-            <div className="pointer-events-none absolute inset-x-0 top-[9.55rem] z-10 px-6 text-center">
+            <div className="pointer-events-none absolute inset-x-0 top-[8.5rem] z-10 px-6 text-center">
               {feedback ? <p className="mt-1 text-xs text-amber-200">{feedback}</p> : null}
             </div>
 
@@ -1542,7 +1789,7 @@ export default function CameraLandingPage() {
 
                 <div className="relative h-[6.2rem]">
                   <div className="absolute bottom-1 left-0 z-10 flex items-end gap-2 pl-0.5">
-                    <p className="text-[3.65rem] font-black italic leading-[0.84] text-white tabular-nums">
+                    <p className="text-[3.2rem] font-black italic leading-[0.9] text-white tabular-nums">
                       {usage.shotsLimit > 0 ? (
                         <RollingShotsValue value={effectiveShotsLeft ?? 0} />
                       ) : (
@@ -1550,10 +1797,10 @@ export default function CameraLandingPage() {
                       )}
                     </p>
                     <div className="pb-1 leading-none">
-                      <p className="text-[13px] font-black uppercase italic tracking-[0.05em] text-white/92">
+                      <p className="text-[14px] font-black uppercase italic tracking-[0.04em] text-white/92">
                         Shots
                       </p>
-                      <p className="mt-0.5 text-[9px] font-semibold uppercase italic tracking-[0.11em] text-white/78">
+                      <p className="mt-0.5 text-[8px] font-semibold uppercase italic tracking-[0.13em] text-white/78">
                         Remaining
                       </p>
                     </div>
@@ -1617,6 +1864,8 @@ export default function CameraLandingPage() {
                       className="rounded-full border border-white/35 bg-black/55 px-3 py-1.5 text-sm text-white shadow-lg"
                       onClick={() => {
                         setShowGallerySheet(false);
+                        setExpandedGalleryImage(null);
+                        setActiveLocalShotId("");
                         setShowGalleryLockNotice(true);
                       }}
                     >
@@ -1652,6 +1901,8 @@ export default function CameraLandingPage() {
                         className="rounded-full border border-white/25 bg-white/20 px-4 py-2 text-sm font-semibold text-white"
                         onClick={() => {
                           setShowGallerySheet(false);
+                          setExpandedGalleryImage(null);
+                          setActiveLocalShotId("");
                           openUploadPicker();
                         }}
                       >
@@ -1767,8 +2018,7 @@ export default function CameraLandingPage() {
                             <button
                               type="button"
                               className="relative block h-24 w-full"
-                              onClick={() => toggleLocalShotSelection(shot.id)}
-                              disabled={shot.status === "queued" || shot.status === "uploading"}
+                              onClick={() => setActiveLocalShotId(shot.id)}
                             >
                               <img
                                 src={shot.previewUrl}
@@ -1786,7 +2036,7 @@ export default function CameraLandingPage() {
                                     : "bg-black/60 text-white"
                                 }`}
                               >
-                                {shot.selected ? "Selected" : "Tap"}
+                                {shot.selected ? "Selected" : "Preview"}
                               </span>
                             </button>
                             <div className="flex flex-col items-start gap-0.5 px-2 py-1">
@@ -1814,6 +2064,64 @@ export default function CameraLandingPage() {
                     </section>
                   ) : null}
 
+                  {activeLocalShot ? (
+                    <div className="absolute inset-0 z-[65] flex items-center justify-center bg-black/75 p-4">
+                      <div className="w-full max-w-sm rounded-2xl border border-white/20 bg-black/85 p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-sm font-semibold text-white">Shot Preview</p>
+                          <button
+                            type="button"
+                            className="rounded-full border border-white/25 bg-white/10 px-3 py-1 text-xs text-white"
+                            onClick={() => setActiveLocalShotId("")}
+                          >
+                            Close
+                          </button>
+                        </div>
+                        <div className="mt-3 overflow-hidden rounded-xl border border-white/15 bg-black/35">
+                          <img
+                            src={activeLocalShot.previewUrl}
+                            alt="Selected local shot preview"
+                            className="h-72 w-full object-contain"
+                          />
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${
+                              activeLocalShot.selected
+                                ? "border-lime-300/55 bg-lime-300/20 text-lime-100"
+                                : "border-white/25 bg-white/10 text-white"
+                            }`}
+                            onClick={() => toggleLocalShotSelection(activeLocalShot.id)}
+                            disabled={
+                              activeLocalShot.status === "queued" || activeLocalShot.status === "uploading"
+                            }
+                          >
+                            {activeLocalShot.selected ? "Selected" : "Select this shot"}
+                          </button>
+                          <button
+                            type="button"
+                            className="rounded-full border border-emerald-300/45 bg-emerald-300/15 px-3 py-1.5 text-xs font-semibold text-emerald-100 disabled:opacity-40"
+                            onClick={() => queueSingleShotForUpload(activeLocalShot.id)}
+                            disabled={
+                              activeLocalShot.status === "queued" || activeLocalShot.status === "uploading"
+                            }
+                          >
+                            Upload this shot
+                          </button>
+                          <button
+                            type="button"
+                            className="rounded-full border border-rose-300/45 bg-rose-300/15 px-3 py-1.5 text-xs font-semibold text-rose-100 disabled:opacity-40"
+                            onClick={() => removeLocalShot(activeLocalShot.id)}
+                            disabled={activeLocalShot.status === "uploading"}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+
                   {galleryFilterMode === "capturer" ? (
                     <div className="mb-3">
                       <label className="text-xs text-white/70">Choose a POV</label>
@@ -1839,15 +2147,24 @@ export default function CameraLandingPage() {
                   ) : (
                     <div className="grid grid-cols-2 gap-3">
                       {filteredGalleryItems.map((item) => (
-                        <article
+                        <button
                           key={item.id}
+                          type="button"
                           className="overflow-hidden rounded-2xl border border-white/10 bg-black/35"
+                          onClick={() =>
+                            setExpandedGalleryImage({
+                              imageUrl: item.imageUrl,
+                              uploaderName: item.uploaderName,
+                              createdAt: item.createdAt,
+                              blur: isGalleryLockedForViewer,
+                            })
+                          }
                         >
                           <img
                             src={item.imageUrl}
                             alt={`Photo by ${item.uploaderName}`}
                             className={`h-52 w-full object-cover ${
-                              isGalleryLockedForViewer && !item.isOwnPhoto
+                              isGalleryLockedForViewer
                                 ? "blur-md brightness-75"
                                 : ""
                             }`}
@@ -1855,23 +2172,51 @@ export default function CameraLandingPage() {
                           />
                           <div className="px-3 py-2">
                             <p className="truncate text-xs text-white/85">{item.uploaderName}</p>
-                            <p className="truncate text-[10px] text-white/60">{item.createdAt}</p>
+                            <p className="truncate text-[10px] text-white/60">
+                              {formatManilaDateTime(item.createdAt)}
+                            </p>
                           </div>
-                        </article>
+                        </button>
                       ))}
                     </div>
                   )}
                 </div>
+
+                {expandedGalleryImage ? (
+                  <div className="absolute inset-0 z-[60] flex items-center justify-center bg-black/90 p-4">
+                    <button
+                      type="button"
+                      className="absolute right-4 top-4 rounded-full border border-white/35 bg-black/70 px-3 py-1 text-sm text-white"
+                      onClick={() => setExpandedGalleryImage(null)}
+                    >
+                      Close
+                    </button>
+                    <div className="w-full max-w-3xl overflow-hidden rounded-2xl border border-white/20 bg-black/40">
+                      <img
+                        src={expandedGalleryImage.imageUrl}
+                        alt={`Photo by ${expandedGalleryImage.uploaderName}`}
+                        className={`max-h-[75dvh] w-full object-contain ${
+                          expandedGalleryImage.blur ? "blur-md brightness-75" : ""
+                        }`}
+                      />
+                      <div className="border-t border-white/15 px-3 py-2 text-xs text-white/80">
+                        <p className="truncate">{expandedGalleryImage.uploaderName}</p>
+                        <p className="truncate text-white/60">
+                          {formatManilaDateTime(expandedGalleryImage.createdAt)}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
 
                 {isGalleryLockedForViewer && showGalleryLockNotice ? (
                   <div className="absolute inset-x-4 bottom-20 z-50">
                     <div className="rounded-2xl border border-white/20 bg-black/75 px-4 py-3 backdrop-blur-sm">
                       <div className="flex items-start justify-between gap-3">
                         <div>
-                          <p className="text-sm font-semibold text-white">Gallery is locked</p>
+                          <p className="text-sm font-semibold text-white">Photos are developing!</p>
                           <p className="mt-1 text-xs text-white/75">
-                            Other guests&apos; shots stay blurred until admin unlock time. Your own
-                            shots remain clear.
+                            It will be reveal at {galleryRevealAtText}.
                           </p>
                         </div>
                         <button
