@@ -1952,22 +1952,15 @@ export default function CameraLandingPage() {
                   >
                     Cancel
                   </button>
-              <button
-                type="button"
-                className="rounded-lg bg-white px-3 py-2 text-sm font-semibold text-black"
-                onClick={() => {
-                  if (!hasValidGuestName) {
-                    setShowGuestNameModal(true);
-                    setGuestNameError(
-                      `Please enter at least ${MIN_GUEST_NAME_LENGTH} characters.`,
-                    );
-                    return;
-                  }
-                  setShowStartNotice(false);
-                  setStarted(true);
-                  setKeepCameraActive(true);
-                  void startCamera();
-                }}
+                  <button
+                    type="button"
+                    className="rounded-lg bg-white px-3 py-2 text-sm font-semibold text-black"
+                    onClick={() => {
+                      setShowStartNotice(false);
+                      setStarted(true);
+                      setKeepCameraActive(true);
+                      void startCamera();
+                    }}
                   >
                     I Understand
                   </button>
