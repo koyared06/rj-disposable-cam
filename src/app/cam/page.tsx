@@ -46,7 +46,17 @@ type LocalShot = {
   selected: boolean;
   status: LocalShotStatus;
   createdAt: number;
+  retryCount: number;
+  nextRetryAt: number | null;
 };
+type UploadAttemptResult =
+  | { ok: true }
+  | {
+      ok: false;
+      retriable: boolean;
+      retryAfterMs: number;
+      errorCode: string;
+    };
 type CameraFacing = "environment" | "user";
 type GalleryFilterMode = "all" | "mine" | "capturer";
 
@@ -55,6 +65,10 @@ const MANILA_TIMEZONE = "Asia/Manila";
 const LOCAL_SHOTS_DB_NAME = "rj-camera-local-shots-v1";
 const LOCAL_SHOTS_STORE_NAME = "shots";
 const WATERMARK_JPEG_QUALITIES = [0.92, 0.86, 0.8, 0.74, 0.68] as const;
+const AUTO_UPLOAD_MAX_RETRIES = 5;
+const AUTO_UPLOAD_RETRY_BASE_MS = 2500;
+const AUTO_UPLOAD_RETRY_MAX_MS = 30000;
+const DEFAULT_UPLOAD_RETRY_AFTER_MS = 6000;
 
 const DEFAULT_SETTINGS: CameraSessionSettings = {
   cameraEnabled: false,
@@ -164,6 +178,38 @@ function formatShotTimeLabel(shotAt: Date) {
   });
 }
 
+function parseRetryAfterMs(response: Response, payload: unknown) {
+  const headerValue = response.headers.get("Retry-After");
+  const parsedHeader = Number.parseInt(headerValue ?? "", 10);
+  if (Number.isFinite(parsedHeader) && parsedHeader > 0) {
+    return parsedHeader * 1000;
+  }
+
+  const payloadRetry = (payload as { retryAfterSec?: unknown } | null)?.retryAfterSec;
+  const parsedPayload = Number(payloadRetry);
+  if (Number.isFinite(parsedPayload) && parsedPayload > 0) {
+    return parsedPayload * 1000;
+  }
+
+  return DEFAULT_UPLOAD_RETRY_AFTER_MS;
+}
+
+function isRetriableUploadResponse(response: Response, payload: unknown) {
+  if (response.status === 429) return true;
+  if (response.status >= 500) return true;
+  const errorCode = String((payload as { errorCode?: unknown } | null)?.errorCode ?? "")
+    .trim()
+    .toUpperCase();
+  return errorCode === "GOOGLE_API_QUOTA" || errorCode === "UPLOAD_INTERNAL_ERROR";
+}
+
+function computeAutoRetryDelayMs(retryCount: number, suggestedMs = DEFAULT_UPLOAD_RETRY_AFTER_MS) {
+  const exponentialDelay = AUTO_UPLOAD_RETRY_BASE_MS * 2 ** Math.max(0, retryCount);
+  const base = Math.max(suggestedMs, exponentialDelay);
+  const jitter = Math.floor(Math.random() * 800);
+  return Math.min(AUTO_UPLOAD_RETRY_MAX_MS, base + jitter);
+}
+
 function drawRoundedRect(
   context: CanvasRenderingContext2D,
   x: number,
@@ -201,6 +247,8 @@ type PersistedLocalShot = {
   selected: boolean;
   status: LocalShotStatus;
   createdAt: number;
+  retryCount?: number;
+  nextRetryAt?: number | null;
 };
 
 function buildLocalShotScope(eventId: string, deviceId: string) {
@@ -373,6 +421,7 @@ export default function CameraLandingPage() {
   const [uploadedShotsCount, setUploadedShotsCount] = useState(0);
   const [uploadBatchTotal, setUploadBatchTotal] = useState(0);
   const [uploadBatchDone, setUploadBatchDone] = useState(0);
+  const [retryPulse, setRetryPulse] = useState(0);
   const [showStartNotice, setShowStartNotice] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [error, setError] = useState("");
@@ -387,6 +436,7 @@ export default function CameraLandingPage() {
   const streamRef = useRef<MediaStream | null>(null);
   const localShotsRef = useRef<LocalShot[]>([]);
   const queueProcessingRef = useRef(false);
+  const retryWakeTimerRef = useRef<number | null>(null);
   const mountedRef = useRef(true);
   const localShotsScopeRef = useRef("");
   const watermarkFontsReadyRef = useRef(false);
@@ -772,7 +822,7 @@ export default function CameraLandingPage() {
     await startCamera(nextFacing);
   }, [cameraFacing, startCamera]);
 
-  const uploadPhotoNow = useCallback(async (fileToUpload: File) => {
+  const uploadPhotoNow = useCallback(async (fileToUpload: File): Promise<UploadAttemptResult> => {
     let timeoutHandle: number | null = null;
     try {
       const abortController = new AbortController();
@@ -789,15 +839,20 @@ export default function CameraLandingPage() {
         body: formData,
         signal: abortController.signal,
       });
-      const payload = await response.json();
+      const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
         const code =
-          typeof payload.errorCode === "string" && payload.errorCode
+          typeof payload?.errorCode === "string" && payload.errorCode
             ? ` [${payload.errorCode}]`
             : "";
-        const hint = typeof payload.hint === "string" && payload.hint ? ` ${payload.hint}` : "";
-        setFeedback(`${payload.error ?? "Unable to upload."}${code}${hint}`);
-        if (payload.usage) {
+        const hint = typeof payload?.hint === "string" && payload.hint ? ` ${payload.hint}` : "";
+        const retryAfterMs = parseRetryAfterMs(response, payload);
+        const retriable = isRetriableUploadResponse(response, payload);
+        const retryNote = retriable
+          ? ` Auto retrying in ${Math.max(1, Math.ceil(retryAfterMs / 1000))}s.`
+          : "";
+        setFeedback(`${payload?.error ?? "Unable to upload."}${code}${hint}${retryNote}`);
+        if (payload?.usage) {
           setUsage((current) => ({
             shotsUsed: Number(payload.usage.shotsUsed ?? current.shotsUsed),
             shotsLimit: Number(payload.usage.shotsLimit ?? current.shotsLimit),
@@ -807,10 +862,15 @@ export default function CameraLandingPage() {
                 : current.shotsLeft,
           }));
         }
-        return false;
+        return {
+          ok: false,
+          retriable,
+          retryAfterMs,
+          errorCode: String(payload?.errorCode ?? ""),
+        };
       }
 
-      if (payload.usage) {
+      if (payload?.usage) {
         setUsage((current) => ({
           shotsUsed: Number(payload.usage.shotsUsed ?? current.shotsUsed),
           shotsLimit: Number(payload.usage.shotsLimit ?? current.shotsLimit),
@@ -823,14 +883,23 @@ export default function CameraLandingPage() {
 
       setFeedback("");
       await loadGallery();
-      return true;
+      return { ok: true };
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
-        setFeedback("Upload timed out. Check internet then retry selected shots.");
+        setFeedback(
+          `Upload timed out. Auto retrying in ${Math.ceil(DEFAULT_UPLOAD_RETRY_AFTER_MS / 1000)}s.`,
+        );
       } else {
-        setFeedback("Network error uploading photo.");
+        setFeedback(
+          `Network error uploading photo. Auto retrying in ${Math.ceil(DEFAULT_UPLOAD_RETRY_AFTER_MS / 1000)}s.`,
+        );
       }
-      return false;
+      return {
+        ok: false,
+        retriable: true,
+        retryAfterMs: DEFAULT_UPLOAD_RETRY_AFTER_MS,
+        errorCode: "NETWORK_RETRY",
+      };
     } finally {
       if (timeoutHandle !== null) {
         window.clearTimeout(timeoutHandle);
@@ -876,6 +945,11 @@ export default function CameraLandingPage() {
               selected: entry.selected,
               status,
               createdAt: entry.createdAt,
+              retryCount: Number.isFinite(entry.retryCount) ? Number(entry.retryCount) : 0,
+              nextRetryAt:
+                typeof entry.nextRetryAt === "number" && Number.isFinite(entry.nextRetryAt)
+                  ? entry.nextRetryAt
+                  : null,
             } satisfies LocalShot;
           });
         setLocalShots((current) => {
@@ -927,6 +1001,8 @@ export default function CameraLandingPage() {
             selected: shot.selected,
             status: persistedStatus,
             createdAt: shot.createdAt,
+            retryCount: shot.retryCount,
+            nextRetryAt: shot.nextRetryAt,
           });
         }
       } catch {
@@ -944,9 +1020,37 @@ export default function CameraLandingPage() {
   }, [localShots, localShotsReadyScope]);
 
   useEffect(() => {
+    if (retryWakeTimerRef.current !== null) {
+      window.clearTimeout(retryWakeTimerRef.current);
+      retryWakeTimerRef.current = null;
+    }
+
     if (uploading || queueProcessingRef.current) return;
-    const nextQueuedShot = localShots.find((shot) => shot.status === "queued");
-    if (!nextQueuedShot) return;
+
+    const now = Date.now();
+    const nextQueuedShot = localShots.find(
+      (shot) => shot.status === "queued" && (!shot.nextRetryAt || shot.nextRetryAt <= now),
+    );
+
+    if (!nextQueuedShot) {
+      const queuedWithFutureRetry = localShots
+        .filter(
+          (shot) =>
+            shot.status === "queued" &&
+            typeof shot.nextRetryAt === "number" &&
+            shot.nextRetryAt > now,
+        )
+        .map((shot) => Number(shot.nextRetryAt));
+      if (queuedWithFutureRetry.length > 0) {
+        const earliestRetryAt = Math.min(...queuedWithFutureRetry);
+        const wakeAfterMs = Math.max(250, earliestRetryAt - now);
+        retryWakeTimerRef.current = window.setTimeout(() => {
+          if (!mountedRef.current) return;
+          setRetryPulse((current) => current + 1);
+        }, wakeAfterMs);
+      }
+      return;
+    }
 
     queueProcessingRef.current = true;
     const nextFile = nextQueuedShot.file;
@@ -955,19 +1059,29 @@ export default function CameraLandingPage() {
     const processNext = async () => {
       setLocalShots((current) =>
         current.map((shot) =>
-          shot.id === nextId ? { ...shot, status: "uploading" } : shot,
+          shot.id === nextId ? { ...shot, status: "uploading", nextRetryAt: null } : shot,
         ),
       );
       setUploading(true);
 
-      let ok = false;
+      let result: UploadAttemptResult = {
+        ok: false,
+        retriable: true,
+        retryAfterMs: DEFAULT_UPLOAD_RETRY_AFTER_MS,
+        errorCode: "UNKNOWN",
+      };
       try {
-        ok = await uploadPhotoNow(nextFile);
+        result = await uploadPhotoNow(nextFile);
       } catch {
-        ok = false;
+        result = {
+          ok: false,
+          retriable: true,
+          retryAfterMs: DEFAULT_UPLOAD_RETRY_AFTER_MS,
+          errorCode: "UNKNOWN",
+        };
       }
 
-      if (ok) {
+      if (result.ok) {
         setLocalShots((current) => {
           const target = current.find((shot) => shot.id === nextId);
           if (target) {
@@ -978,11 +1092,35 @@ export default function CameraLandingPage() {
         setUploadedShotsCount((current) => current + 1);
         setUploadBatchDone((current) => current + 1);
       } else {
+        let retryMessage = "";
         setLocalShots((current) =>
-          current.map((shot) =>
-            shot.id === nextId ? { ...shot, status: "failed" } : shot,
-          ),
+          current.map((shot) => {
+            if (shot.id !== nextId) return shot;
+            const nextRetryCount = (shot.retryCount ?? 0) + 1;
+            const canAutoRetry = result.retriable && nextRetryCount <= AUTO_UPLOAD_MAX_RETRIES;
+            if (!canAutoRetry) {
+              return {
+                ...shot,
+                status: "failed",
+                retryCount: nextRetryCount,
+                nextRetryAt: null,
+              };
+            }
+
+            const retryDelayMs = computeAutoRetryDelayMs(nextRetryCount - 1, result.retryAfterMs);
+            const seconds = Math.max(1, Math.ceil(retryDelayMs / 1000));
+            retryMessage = `Upload busy. Retrying shot ${nextRetryCount}/${AUTO_UPLOAD_MAX_RETRIES} in ${seconds}s.`;
+            return {
+              ...shot,
+              status: "queued",
+              retryCount: nextRetryCount,
+              nextRetryAt: Date.now() + retryDelayMs,
+            };
+          }),
         );
+        if (retryMessage) {
+          setFeedback(retryMessage);
+        }
       }
 
       queueProcessingRef.current = false;
@@ -992,10 +1130,13 @@ export default function CameraLandingPage() {
     };
 
     void processNext();
-  }, [localShots, uploading, uploadPhotoNow]);
+  }, [localShots, retryPulse, uploading, uploadPhotoNow]);
 
   useEffect(
     () => () => {
+      if (retryWakeTimerRef.current !== null) {
+        window.clearTimeout(retryWakeTimerRef.current);
+      }
       localShotsRef.current.forEach((shot) => {
         URL.revokeObjectURL(shot.previewUrl);
       });
@@ -1024,6 +1165,8 @@ export default function CameraLandingPage() {
         selected: true,
         status: "draft",
         createdAt: Date.now(),
+        retryCount: 0,
+        nextRetryAt: null,
       },
     ]);
     setFeedback("Shot saved locally. Select and upload when ready.");
@@ -1059,6 +1202,8 @@ export default function CameraLandingPage() {
           selected: true,
           status: "draft",
           createdAt: Date.now(),
+          retryCount: 0,
+          nextRetryAt: null,
         });
       }
 
@@ -1140,7 +1285,7 @@ export default function CameraLandingPage() {
     setLocalShots((current) =>
       current.map((shot) =>
         shot.selected && (shot.status === "draft" || shot.status === "failed")
-          ? { ...shot, status: "queued" }
+          ? { ...shot, status: "queued", retryCount: 0, nextRetryAt: null }
           : shot,
       ),
     );
@@ -1156,7 +1301,7 @@ export default function CameraLandingPage() {
         if (shot.id !== id) return shot;
         if (shot.status === "draft" || shot.status === "failed") {
           queued = true;
-          return { ...shot, selected: true, status: "queued" };
+          return { ...shot, selected: true, status: "queued", retryCount: 0, nextRetryAt: null };
         }
         return shot;
       }),
@@ -1183,7 +1328,7 @@ export default function CameraLandingPage() {
     setLocalShots((current) =>
       current.map((shot) =>
         shot.status === "failed"
-          ? { ...shot, status: "queued", selected: true }
+          ? { ...shot, status: "queued", selected: true, retryCount: 0, nextRetryAt: null }
           : shot,
       ),
     );

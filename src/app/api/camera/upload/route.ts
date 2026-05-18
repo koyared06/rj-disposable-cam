@@ -30,7 +30,14 @@ function buildDriveFileName(inviteCode: string, extension: string) {
   return `camera-${safeInviteCode}-${stamp}.${extension}`;
 }
 
-function classifyUploadFailure(error: unknown) {
+type UploadFailureClassification = {
+  code: string;
+  hint: string;
+  status?: number;
+  retryAfterSec?: number;
+};
+
+function classifyUploadFailure(error: unknown): UploadFailureClassification {
   const unsafe = (error as {
     status?: number | string;
     code?: number | string;
@@ -105,6 +112,8 @@ function classifyUploadFailure(error: unknown) {
     return {
       code: "GOOGLE_API_QUOTA",
       hint: "Google API quota/rate limit reached. Retry later or reduce upload burst.",
+      status: 429,
+      retryAfterSec: 8,
     };
   }
 
@@ -118,6 +127,7 @@ function classifyUploadFailure(error: unknown) {
   return {
     code: "UPLOAD_INTERNAL_ERROR",
     hint: "Check Vercel Function logs for /api/camera/upload.",
+    status: 500,
   };
 }
 
@@ -149,7 +159,7 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function withQuotaRetry<T>(operation: () => Promise<T>, maxAttempts = 3): Promise<T> {
+async function withQuotaRetry<T>(operation: () => Promise<T>, maxAttempts = 4): Promise<T> {
   let lastError: unknown = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
@@ -159,7 +169,9 @@ async function withQuotaRetry<T>(operation: () => Promise<T>, maxAttempts = 3): 
       if (attempt >= maxAttempts || !isQuotaError(error)) {
         throw error;
       }
-      await sleep(350 * attempt);
+      const baseDelayMs = 1200 * 2 ** (attempt - 1);
+      const jitterMs = Math.floor(Math.random() * 550);
+      await sleep(baseDelayMs + jitterMs);
     }
   }
   throw lastError ?? new Error("Operation failed after retries.");
@@ -282,7 +294,7 @@ export async function POST(request: Request) {
       throw new Error("Missing GOOGLE_DRIVE_CAMERA_FOLDER_ID.");
     }
 
-    const driveFolders = await (async () => {
+    const driveFolders = await withQuotaRetry(async () => {
       try {
         return await resolveCameraDriveFolders();
       } catch (folderError) {
@@ -293,7 +305,7 @@ export async function POST(request: Request) {
           previewsFolderId: rootFolderId,
         };
       }
-    })();
+    }, 4);
 
     const resolvedUploaderName = payload.uploaderName?.trim() || uploaderNameFallback || "Guest";
 
@@ -306,21 +318,29 @@ export async function POST(request: Request) {
     const originalFileName = buildDriveFileName(actorCode, processed.extension);
     const previewFileName = buildDriveFileName(`${actorCode}-preview`, processed.extension);
 
-    const uploadedOriginal = await uploadImageToDrive({
-      buffer: processed.originalBuffer,
-      fileName: originalFileName,
-      mimeType: processed.mimeType,
-      parentFolderId: driveFolders.originalsFolderId,
-    });
+    const uploadedOriginal = await withQuotaRetry(
+      () =>
+        uploadImageToDrive({
+          buffer: processed.originalBuffer,
+          fileName: originalFileName,
+          mimeType: processed.mimeType,
+          parentFolderId: driveFolders.originalsFolderId,
+        }),
+      4,
+    );
 
     const uploadedPreview = await (async () => {
       try {
-        return await uploadImageToDrive({
-          buffer: processed.previewBuffer,
-          fileName: previewFileName,
-          mimeType: processed.mimeType,
-          parentFolderId: driveFolders.previewsFolderId,
-        });
+        return await withQuotaRetry(
+          () =>
+            uploadImageToDrive({
+              buffer: processed.previewBuffer,
+              fileName: previewFileName,
+              mimeType: processed.mimeType,
+              parentFolderId: driveFolders.previewsFolderId,
+            }),
+          3,
+        );
       } catch (previewUploadError) {
         console.warn("Preview upload failed. Falling back to original file reference.", previewUploadError);
         return uploadedOriginal;
@@ -372,14 +392,21 @@ export async function POST(request: Request) {
     console.error("Camera upload error:", error);
     const classified = classifyUploadFailure(error);
     const details = error instanceof Error ? error.message : "Unknown camera upload error.";
+    const statusCode = Number.isFinite(classified.status) ? Number(classified.status) : 500;
+    const retryAfterSec =
+      Number.isFinite(classified.retryAfterSec) && Number(classified.retryAfterSec) > 0
+        ? Number(classified.retryAfterSec)
+        : undefined;
+    const headers = retryAfterSec ? { "Retry-After": String(retryAfterSec) } : undefined;
     return NextResponse.json(
       {
         error: "Unable to upload photo right now.",
         errorCode: classified.code,
         hint: classified.hint,
+        ...(retryAfterSec ? { retryAfterSec } : {}),
         ...(process.env.NODE_ENV !== "production" ? { details } : {}),
       },
-      { status: 500 },
+      { status: statusCode, headers },
     );
   }
 }
