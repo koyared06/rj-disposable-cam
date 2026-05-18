@@ -9,6 +9,53 @@ import { validateAdmin } from "@/lib/admin-auth";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableDriveDownloadError(error: unknown) {
+  const unsafe = (error as {
+    response?: { status?: number | string; data?: unknown };
+    status?: number | string;
+    code?: number | string;
+    message?: string;
+  } | null) ?? {};
+  const status = Number(unsafe.response?.status ?? unsafe.status ?? unsafe.code ?? 0);
+  const rawMessage = error instanceof Error ? error.message : String(error ?? "");
+  const message = rawMessage.toLowerCase();
+  return (
+    status === 429 ||
+    status === 500 ||
+    status === 502 ||
+    status === 503 ||
+    status === 504 ||
+    message.includes("quota") ||
+    message.includes("rate limit") ||
+    message.includes("too many requests") ||
+    message.includes("econnreset") ||
+    message.includes("etimedout") ||
+    message.includes("socket hang up")
+  );
+}
+
+async function downloadDriveFileWithRetry(fileId: string, maxAttempts = 3) {
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await downloadDriveFile(fileId);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= maxAttempts || !isRetryableDriveDownloadError(error)) {
+        throw error;
+      }
+      const backoffMs = 250 * 2 ** (attempt - 1);
+      const jitterMs = Math.floor(Math.random() * 220);
+      await sleep(backoffMs + jitterMs);
+    }
+  }
+  throw lastError ?? new Error("Drive download failed after retries.");
+}
+
 function normalizeDriveFileId(rawValue: string) {
   const value = rawValue.trim();
   if (!value) return "";
@@ -107,7 +154,7 @@ export async function GET(request: NextRequest) {
     let lastError: unknown = null;
     for (const driveFileId of fileIdCandidates) {
       try {
-        bytes = await downloadDriveFile(driveFileId);
+        bytes = await downloadDriveFileWithRetry(driveFileId, 3);
         break;
       } catch (candidateError) {
         lastError = candidateError;
@@ -132,7 +179,7 @@ export async function GET(request: NextRequest) {
       headers: {
         "Content-Type": photo.mimeType || "application/octet-stream",
         "Content-Length": String(bytes.byteLength),
-        "Cache-Control": "private, max-age=60",
+        "Cache-Control": "private, max-age=300, stale-while-revalidate=60",
       },
     });
   } catch (error) {
