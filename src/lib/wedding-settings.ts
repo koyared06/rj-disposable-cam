@@ -39,6 +39,14 @@ const DEFAULT_CAMERA_EVENT_HASHTAG = "#soaferRED-ynasiJESS";
 const DEFAULT_CAMERA_EVENT_TAGLINE = "Welcome to our Forever!";
 const DEFAULT_CAMERA_START_BUTTON_LABEL = "Start Camera";
 const DEFAULT_CAMERA_QR_EXPIRY_HOURS = 48;
+const SETTINGS_CACHE_TTL_MS = 15_000;
+
+let settingsCache:
+  | {
+      value: WeddingSettings;
+      expiresAt: number;
+    }
+  | null = null;
 
 export type WeddingSettings = {
   weddingDate: string;
@@ -77,6 +85,10 @@ function isMissingSheetError(error: unknown) {
 }
 
 export async function readWeddingSettings(): Promise<WeddingSettings> {
+  if (settingsCache && settingsCache.expiresAt > Date.now()) {
+    return settingsCache.value;
+  }
+
   try {
     const rows = await readRows(`${getSettingsSheetName()}!A2:B`);
     const normalized = new Map(
@@ -106,7 +118,7 @@ export async function readWeddingSettings(): Promise<WeddingSettings> {
     const isQrExpired =
       cameraLastQrExpiresAt && Date.parse(cameraLastQrExpiresAt) <= Date.now();
 
-    return {
+    const resolved = {
       weddingDate: normalized.get(WEDDING_DATE_KEY) ?? "",
       weddingTime: normalizeWeddingTime(normalized.get(WEDDING_TIME_KEY) ?? ""),
       showCountdown: parseBooleanSetting(normalized.get(SHOW_COUNTDOWN_KEY) ?? "", true),
@@ -171,9 +183,14 @@ export async function readWeddingSettings(): Promise<WeddingSettings> {
         : cameraLastQrExpiresInHours,
       cameraLastQrGeneratedAt: isQrExpired ? "" : cameraLastQrGeneratedAt,
     };
+    settingsCache = {
+      value: resolved,
+      expiresAt: Date.now() + SETTINGS_CACHE_TTL_MS,
+    };
+    return resolved;
   } catch (error) {
     if (isMissingSheetError(error)) {
-      return {
+      const fallback = {
         weddingDate: "",
         weddingTime: DEFAULT_WEDDING_TIME,
         showCountdown: true,
@@ -198,6 +215,11 @@ export async function readWeddingSettings(): Promise<WeddingSettings> {
         cameraLastQrExpiresInHours: DEFAULT_CAMERA_QR_EXPIRY_HOURS,
         cameraLastQrGeneratedAt: "",
       };
+      settingsCache = {
+        value: fallback,
+        expiresAt: Date.now() + SETTINGS_CACHE_TTL_MS,
+      };
+      return fallback;
     }
     throw error;
   }
@@ -312,6 +334,7 @@ export async function saveWeddingSettings(settings: WeddingSettings) {
   ];
   const endRow = 1 + rowsToWrite.length;
   await writeRows(`${sheetName}!A2:B${endRow}`, rowsToWrite);
+  settingsCache = null;
 }
 
 function normalizeWeddingTime(value: string): string {

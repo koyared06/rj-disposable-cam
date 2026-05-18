@@ -5,6 +5,9 @@ const SCOPES = ["https://www.googleapis.com/auth/spreadsheets"];
 
 type SheetsClient = ReturnType<typeof google.sheets>;
 
+const ENSURE_SHEET_CACHE_TTL_MS = 10 * 60 * 1000;
+const ensuredSheetCache = new Map<string, number>();
+
 function getClient(): SheetsClient {
   const env = getSheetsEnv();
   const auth = new google.auth.JWT({
@@ -107,6 +110,12 @@ export async function ensureSheetWithHeaders(
   sheetName: string,
   headers: string[],
 ) {
+  const cacheKey = `${getSpreadsheetId()}::${sheetName}`;
+  const cachedUntil = ensuredSheetCache.get(cacheKey) ?? 0;
+  if (cachedUntil > Date.now()) {
+    return;
+  }
+
   const sheets = getClient();
   const spreadsheetId = getSpreadsheetId();
 
@@ -155,4 +164,6 @@ export async function ensureSheetWithHeaders(
       },
     });
   }
+
+  ensuredSheetCache.set(cacheKey, Date.now() + ENSURE_SHEET_CACHE_TTL_MS);
 }

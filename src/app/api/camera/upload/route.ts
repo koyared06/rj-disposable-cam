@@ -121,9 +121,53 @@ function classifyUploadFailure(error: unknown) {
   };
 }
 
+function isQuotaError(error: unknown) {
+  const unsafe = (error as {
+    status?: number | string;
+    code?: number | string;
+    response?: {
+      status?: number | string;
+      data?: { error?: { message?: string } | string };
+    };
+    message?: string;
+  } | null) ?? {};
+  const status = Number(unsafe.response?.status ?? unsafe.status ?? unsafe.code ?? 0);
+  const responseErrorMessage =
+    typeof unsafe.response?.data?.error === "string"
+      ? unsafe.response?.data?.error
+      : unsafe.response?.data?.error?.message ?? "";
+  const combined = `${unsafe.message ?? ""} ${responseErrorMessage}`.toLowerCase();
+  return (
+    status === 429 ||
+    combined.includes("quota") ||
+    combined.includes("rate limit") ||
+    combined.includes("too many requests")
+  );
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function withQuotaRetry<T>(operation: () => Promise<T>, maxAttempts = 3): Promise<T> {
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (attempt >= maxAttempts || !isQuotaError(error)) {
+        throw error;
+      }
+      await sleep(350 * attempt);
+    }
+  }
+  throw lastError ?? new Error("Operation failed after retries.");
+}
+
 export async function POST(request: Request) {
   try {
-    const settings = await readWeddingSettings();
+    const settings = await withQuotaRetry(() => readWeddingSettings(), 3);
     if (!settings.cameraEnabled) {
       return NextResponse.json(
         { error: "Guest camera is currently disabled." },
@@ -214,7 +258,7 @@ export async function POST(request: Request) {
     }
 
     const shotsLimit = settings.cameraShotLimitPerInvite;
-    const shotsUsed = await countCameraPhotosByInvite(actorCode);
+    const shotsUsed = await withQuotaRetry(() => countCameraPhotosByInvite(actorCode), 3);
     if (shotsLimit > 0 && shotsUsed >= shotsLimit) {
       return NextResponse.json(
         {
@@ -288,7 +332,9 @@ export async function POST(request: Request) {
     const width = normalizeIntegerField(form.get("width")) || processed.width;
     const height = normalizeIntegerField(form.get("height")) || processed.height;
 
-    const saved = await appendCameraPhoto({
+    const saved = await withQuotaRetry(
+      () =>
+        appendCameraPhoto({
       inviteCode: actorCode,
       uploaderName: resolvedUploaderName,
       driveFileId: uploadedOriginal.fileId,
@@ -301,7 +347,9 @@ export async function POST(request: Request) {
       visibilityAt,
       rejectionReason: "",
       hiddenAt: "",
-    });
+        }),
+      3,
+    );
 
     return NextResponse.json({
       ok: true,

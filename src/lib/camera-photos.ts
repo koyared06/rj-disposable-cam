@@ -30,6 +30,16 @@ const CAMERA_PHOTOS_HEADERS = [
   "hiddenAt",
 ];
 
+function isMissingSheetError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("unable to parse range") ||
+    normalized.includes("requested entity was not found") ||
+    (normalized.includes("sheet") && normalized.includes("not found"))
+  );
+}
+
 export async function ensureCameraPhotosSheet() {
   await ensureSheetWithHeaders(getCameraPhotosSheetName(), CAMERA_PHOTOS_HEADERS);
 }
@@ -51,19 +61,24 @@ export async function findCameraPhotoById(id: string) {
 export async function countCameraPhotosByInvite(inviteCode: string) {
   const normalizedInviteCode = inviteCode.trim().toLowerCase();
   if (!normalizedInviteCode) return 0;
-
-  const photos = await readCameraPhotos();
-  return photos.filter(
-    (photo) => photo.inviteCode.trim().toLowerCase() === normalizedInviteCode,
-  ).length;
+  try {
+    const inviteCodeRows = await readRows(`${getCameraPhotosSheetName()}!C2:C`);
+    let count = 0;
+    for (const row of inviteCodeRows) {
+      const code = (row[0] ?? "").trim().toLowerCase();
+      if (code === normalizedInviteCode) count += 1;
+    }
+    return count;
+  } catch (error) {
+    if (isMissingSheetError(error)) return 0;
+    throw error;
+  }
 }
 
 export async function appendCameraPhoto(
   photo: Omit<CameraPhotoRow, "rowNumber" | "id" | "createdAt"> &
     Partial<Pick<CameraPhotoRow, "id" | "createdAt">>,
 ) {
-  await ensureCameraPhotosSheet();
-
   const normalized: Omit<CameraPhotoRow, "rowNumber"> = {
     id: (photo.id ?? "").trim() || randomUUID().replace(/-/g, ""),
     createdAt: photo.createdAt?.trim() || new Date().toISOString(),
@@ -80,8 +95,15 @@ export async function appendCameraPhoto(
     rejectionReason: photo.rejectionReason,
     hiddenAt: photo.hiddenAt,
   };
-
-  await appendRow(`${getCameraPhotosSheetName()}!A2:N`, cameraPhotoToArray(normalized));
+  try {
+    await appendRow(`${getCameraPhotosSheetName()}!A2:N`, cameraPhotoToArray(normalized));
+  } catch (error) {
+    if (!isMissingSheetError(error)) {
+      throw error;
+    }
+    await ensureCameraPhotosSheet();
+    await appendRow(`${getCameraPhotosSheetName()}!A2:N`, cameraPhotoToArray(normalized));
+  }
 
   return normalized;
 }

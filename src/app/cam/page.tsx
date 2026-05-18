@@ -2035,9 +2035,18 @@ export default function CameraLandingPage() {
               <div className="w-full">
                 {feedback ? (
                   <div className="mb-2 px-1 text-center">
-                    <p className="rounded-lg border border-amber-200/35 bg-black/45 px-2 py-1.5 text-xs text-amber-200">
-                      {feedback}
-                    </p>
+                    <div className="flex items-center gap-2 rounded-lg border border-amber-200/35 bg-black/45 px-2 py-1.5 text-xs text-amber-200">
+                      <p className="flex-1 text-left">{feedback}</p>
+                      <button
+                        type="button"
+                        className="inline-flex h-5 w-5 items-center justify-center rounded border border-amber-200/45 text-[10px] text-amber-200/90 hover:bg-amber-200/10"
+                        onClick={() => setFeedback("")}
+                        aria-label="Dismiss message"
+                        title="Dismiss"
+                      >
+                        ×
+                      </button>
+                    </div>
                   </div>
                 ) : null}
                 <div className="mb-3 grid grid-cols-[auto_1fr_auto] items-center gap-2">
