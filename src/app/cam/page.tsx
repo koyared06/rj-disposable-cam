@@ -54,6 +54,7 @@ const ADMIN_SESSION_KEY = "rj_admin_session_v1";
 const MANILA_TIMEZONE = "Asia/Manila";
 const LOCAL_SHOTS_DB_NAME = "rj-camera-local-shots-v1";
 const LOCAL_SHOTS_STORE_NAME = "shots";
+const WATERMARK_JPEG_QUALITIES = [0.92, 0.86, 0.8, 0.74, 0.68] as const;
 
 const DEFAULT_SETTINGS: CameraSessionSettings = {
   cameraEnabled: false,
@@ -183,6 +184,12 @@ function drawRoundedRect(
   context.lineTo(x, y + safeRadius);
   context.quadraticCurveTo(x, y, x + safeRadius, y);
   context.closePath();
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality?: number) {
+  return new Promise<Blob | null>((resolve) => {
+    canvas.toBlob((blob) => resolve(blob), type, quality);
+  });
 }
 
 type PersistedLocalShot = {
@@ -660,13 +667,25 @@ export default function CameraLandingPage() {
         context.drawImage(image, 0, 0, canvas.width, canvas.height);
         drawShotWatermark(context, canvas.width, canvas.height, new Date());
 
-        const outputType = file.type === "image/png" ? "image/png" : "image/jpeg";
-        const blob = await new Promise<Blob | null>((resolve) => {
-          canvas.toBlob(resolve, outputType, 0.95);
-        });
-        if (!blob) return file;
-        return new File([blob], file.name, {
-          type: outputType,
+        const maxBytes =
+          settings.cameraMaxUploadMb > 0
+            ? settings.cameraMaxUploadMb * 1024 * 1024
+            : Number.POSITIVE_INFINITY;
+
+        let bestBlob: Blob | null = null;
+        for (const quality of WATERMARK_JPEG_QUALITIES) {
+          const blob = await canvasToBlob(canvas, "image/jpeg", quality);
+          if (!blob) continue;
+          bestBlob = blob;
+          if (!Number.isFinite(maxBytes) || blob.size <= maxBytes) break;
+        }
+
+        if (!bestBlob) return file;
+        if (Number.isFinite(maxBytes) && bestBlob.size > maxBytes) {
+          return null;
+        }
+        return new File([bestBlob], file.name, {
+          type: "image/jpeg",
           lastModified: Date.now(),
         });
       } catch {
@@ -675,7 +694,7 @@ export default function CameraLandingPage() {
         URL.revokeObjectURL(objectUrl);
       }
     },
-    [drawShotWatermark, ensureWatermarkFontsLoaded],
+    [drawShotWatermark, ensureWatermarkFontsLoaded, settings.cameraMaxUploadMb],
   );
 
   const startCamera = useCallback(
@@ -1061,8 +1080,27 @@ export default function CameraLandingPage() {
     if (selected.length < 1) return;
     setFeedback("Applying watermark...");
     const processed: File[] = [];
+    let skippedTooLarge = 0;
     for (const file of selected) {
-      processed.push(await applyWatermarkToImageFile(file));
+      const item = await applyWatermarkToImageFile(file);
+      if (!item) {
+        skippedTooLarge += 1;
+        continue;
+      }
+      processed.push(item);
+    }
+    if (processed.length < 1) {
+      setFeedback(
+        skippedTooLarge > 0
+          ? `Selected file(s) exceed max upload size (${settings.cameraMaxUploadMb} MB).`
+          : "No valid image files to add.",
+      );
+      return;
+    }
+    if (skippedTooLarge > 0) {
+      setFeedback(
+        `${processed.length} photo(s) added. ${skippedTooLarge} skipped (exceeds ${settings.cameraMaxUploadMb} MB).`,
+      );
     }
     addLocalFilesBatch(processed);
   }
@@ -1233,11 +1271,25 @@ export default function CameraLandingPage() {
       window.setTimeout(() => setFlashPulse(false), 150);
     }
 
-    const blob = await new Promise<Blob | null>((resolve) => {
-      canvas.toBlob(resolve, "image/jpeg", 0.95);
-    });
+    const maxBytes =
+      settings.cameraMaxUploadMb > 0
+        ? settings.cameraMaxUploadMb * 1024 * 1024
+        : Number.POSITIVE_INFINITY;
+    let blob: Blob | null = null;
+    for (const quality of WATERMARK_JPEG_QUALITIES) {
+      const candidate = await canvasToBlob(canvas, "image/jpeg", quality);
+      if (!candidate) continue;
+      blob = candidate;
+      if (!Number.isFinite(maxBytes) || candidate.size <= maxBytes) break;
+    }
     if (!blob) {
       setFeedback("Unable to capture photo.");
+      return;
+    }
+    if (Number.isFinite(maxBytes) && blob.size > maxBytes) {
+      setFeedback(
+        `Captured photo is too large for upload (${settings.cameraMaxUploadMb} MB max). Try again.`,
+      );
       return;
     }
 
