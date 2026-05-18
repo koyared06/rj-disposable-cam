@@ -62,6 +62,7 @@ type GalleryFilterMode = "all" | "mine" | "capturer";
 
 const ADMIN_SESSION_KEY = "rj_admin_session_v1";
 const MANILA_TIMEZONE = "Asia/Manila";
+const MANILA_UTC_OFFSET = "+08:00";
 const LOCAL_SHOTS_DB_NAME = "rj-camera-local-shots-v1";
 const LOCAL_SHOTS_STORE_NAME = "shots";
 const WATERMARK_JPEG_QUALITIES = [0.92, 0.86, 0.8, 0.74, 0.68] as const;
@@ -116,9 +117,10 @@ function resolveGalleryUnlockMessage(settings: CameraSessionSettings) {
   const time = settings.cameraGalleryUnlockTime.trim();
   if (!date) return "";
 
-  const iso = `${date}T${time || "00:00"}:00`;
-  const unlockAt = new Date(iso);
-  if (Number.isNaN(unlockAt.getTime())) return "";
+  const unlockAt = parseManilaWallClockDateTime(date, time || "00:00");
+  if (!unlockAt) return "";
+  const unlockAtTime = unlockAt.getTime();
+  if (Number.isNaN(unlockAtTime)) return "";
 
   const formatted = unlockAt.toLocaleString("en-PH", {
     year: "numeric",
@@ -129,10 +131,23 @@ function resolveGalleryUnlockMessage(settings: CameraSessionSettings) {
     timeZone: MANILA_TIMEZONE,
   });
 
-  if (unlockAt.getTime() <= Date.now()) {
+  if (unlockAtTime <= Date.now()) {
     return `Gallery unlock is active since ${formatted}.`;
   }
   return `Gallery photos unlock on ${formatted}.`;
+}
+
+function parseManilaWallClockDateTime(date: string, time: string) {
+  const normalizedDate = (date ?? "").trim();
+  const normalizedTime = (time ?? "").trim() || "00:00";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalizedDate)) return null;
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(normalizedTime)) return null;
+
+  const unlockAt = new Date(
+    `${normalizedDate}T${normalizedTime}:00${MANILA_UTC_OFFSET}`,
+  );
+  if (Number.isNaN(unlockAt.getTime())) return null;
+  return unlockAt;
 }
 
 function formatManilaDateTime(value: string) {
@@ -362,16 +377,19 @@ function RollingShotsValue({ value }: { value: number }) {
 export default function CameraLandingPage() {
   const qrParams = useMemo(() => {
     if (typeof window === "undefined") {
-      return { eventId: "", cameraToken: "" };
+      return { eventId: "", cameraToken: "", adminView: false };
     }
     const params = new URLSearchParams(window.location.search);
+    const adminViewParam = (params.get("adminView") ?? "").trim();
     return {
       eventId: (params.get("e") ?? "").trim(),
       cameraToken: (params.get("t") ?? "").trim(),
+      adminView: adminViewParam === "1",
     };
   }, []);
   const eventId = qrParams.eventId;
   const cameraToken = qrParams.cameraToken;
+  const adminView = qrParams.adminView;
   const [deviceId, setDeviceId] = useState("");
   const [settings, setSettings] = useState<CameraSessionSettings>(DEFAULT_SETTINGS);
   const [galleryItems, setGalleryItems] = useState<CameraGalleryItem[]>([]);
@@ -406,6 +424,7 @@ export default function CameraLandingPage() {
   const [zoomOptions, setZoomOptions] = useState<number[]>([1]);
   const [selectedZoom, setSelectedZoom] = useState(1);
   const [adminToken] = useState(() => {
+    if (!adminView) return "";
     if (typeof window === "undefined") return "";
     try {
       return window.sessionStorage.getItem(ADMIN_SESSION_KEY)?.trim() ?? "";
@@ -475,7 +494,7 @@ export default function CameraLandingPage() {
   const hasValidGuestName = normalizedGuestName.length >= MIN_GUEST_NAME_LENGTH;
   const isGuestNameDraftValid =
     guestNameDraft.trim().length >= MIN_GUEST_NAME_LENGTH;
-  const isAdminViewer = Boolean(adminToken.trim());
+  const isAdminViewer = adminView && Boolean(adminToken.trim());
 
   const stopCamera = useCallback((manualClose = false) => {
     const stream = streamRef.current;
@@ -510,7 +529,7 @@ export default function CameraLandingPage() {
         device: deviceId,
       });
       const response = await fetch(`/api/camera/list?${params.toString()}`, {
-        headers: adminToken
+        headers: isAdminViewer
           ? {
               "x-admin-token": adminToken,
             }
@@ -536,7 +555,14 @@ export default function CameraLandingPage() {
     } catch {
       setFeedback("Unable to load gallery right now.");
     }
-  }, [adminToken, cameraToken, deviceId, eventId, settings.cameraShotLimitPerInvite]);
+  }, [
+    adminToken,
+    cameraToken,
+    deviceId,
+    eventId,
+    isAdminViewer,
+    settings.cameraShotLimitPerInvite,
+  ]);
 
   const saveGuestName = useCallback(
     (inputName: string) => {
@@ -1802,9 +1828,7 @@ export default function CameraLandingPage() {
     const date = settings.cameraGalleryUnlockDate.trim();
     const time = settings.cameraGalleryUnlockTime.trim() || "00:00";
     if (!date) return null;
-    const value = new Date(`${date}T${time}:00`);
-    if (Number.isNaN(value.getTime())) return null;
-    return value;
+    return parseManilaWallClockDateTime(date, time);
   })();
   const cameraEndsText = galleryUnlockAt
     ? galleryUnlockAt.toLocaleString("en-PH", {
