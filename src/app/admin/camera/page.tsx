@@ -421,8 +421,8 @@ export default function CameraAdminPage() {
     [qrActionsMenu, qrHistory],
   );
   const qrCenterTitlePreview = useMemo(
-    () => (settings.cameraEventDisplayTitle.trim() || "Red & Jess").slice(0, 26),
-    [settings.cameraEventDisplayTitle],
+    () => (settings.cameraEventTitle.trim() || "Guest Camera").slice(0, 26),
+    [settings.cameraEventTitle],
   );
 
   const renderQrDataUrl = useCallback(async (url: string, width: number) => {
@@ -2166,7 +2166,7 @@ export default function CameraAdminPage() {
                 />
               </label>
               <label className="flex w-full flex-col gap-1 text-sm text-[var(--info-text)] sm:col-span-2 xl:col-span-3">
-                <span>Landing Subtitle</span>
+                <span>Landing Caption</span>
                 <textarea
                   className="rounded-lg border border-[var(--info-border)] bg-[var(--surface)] px-3 py-2"
                   value={settings.cameraEventSubtitle}
@@ -2308,24 +2308,6 @@ export default function CameraAdminPage() {
                           <p className="mt-2 text-sm text-white/85">
                             {settings.cameraEventSubtitle.trim() ||
                               "Capture moments from our celebration."}
-                          </p>
-                          <p
-                            className="mt-3 text-3xl leading-tight text-white"
-                            style={{ fontFamily: "'Great Vibes', var(--font-script), 'Times New Roman', serif" }}
-                          >
-                            {settings.cameraEventDisplayTitle.trim() || "Red & Jess"}
-                          </p>
-                          <p
-                            className="mt-1 text-base italic text-white/90"
-                            style={{ fontFamily: "'Cormorant Garamond', var(--font-display), 'Times New Roman', serif" }}
-                          >
-                            {settings.cameraEventTagline.trim() || "Welcome to our Forever!"}
-                          </p>
-                          <p
-                            className="mt-1 text-sm italic text-white/80"
-                            style={{ fontFamily: "'Cormorant Garamond', var(--font-display), 'Times New Roman', serif" }}
-                          >
-                            {formatEventHashtag(settings.cameraEventHashtag)}
                           </p>
                           <button
                             type="button"

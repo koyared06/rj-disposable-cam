@@ -1490,24 +1490,7 @@ export default function CameraLandingPage() {
           )}
           <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-black/40" />
           <div className="relative z-10 w-full max-w-md rounded-3xl border border-white/20 bg-black/40 p-5 backdrop-blur-sm">
-            <h1
-              className="mt-2 text-4xl leading-tight text-white"
-              style={{ fontFamily: "'Great Vibes', var(--font-script), 'Times New Roman', serif" }}
-            >
-              {settings.cameraEventDisplayTitle}
-            </h1>
-            <p
-              className="mt-1 text-lg italic text-white/90"
-              style={{ fontFamily: "'Cormorant Garamond', var(--font-display), 'Times New Roman', serif" }}
-            >
-              {settings.cameraEventTagline}
-            </p>
-            <p
-              className="mt-1 text-base italic text-white/85"
-              style={{ fontFamily: "'Cormorant Garamond', var(--font-display), 'Times New Roman', serif" }}
-            >
-              {formatEventHashtag(settings.cameraEventHashtag)}
-            </p>
+            <h1 className="mt-2 text-3xl font-semibold">{settings.cameraEventTitle}</h1>
             <p className="mt-2 text-sm text-white/80">{settings.cameraEventSubtitle}</p>
             <button
               type="button"
