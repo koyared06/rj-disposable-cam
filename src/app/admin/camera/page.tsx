@@ -329,6 +329,8 @@ export default function CameraAdminPage() {
   const [qrModalImageDataUrl, setQrModalImageDataUrl] = useState("");
   const [qrModalLoading, setQrModalLoading] = useState(false);
   const [photoPreviewId, setPhotoPreviewId] = useState("");
+  const [selectedPhotoIds, setSelectedPhotoIds] = useState<string[]>([]);
+  const [cameraBulkActionLoading, setCameraBulkActionLoading] = useState("");
   const [qrPage, setQrPage] = useState(1);
   const [photoPage, setPhotoPage] = useState(1);
   const [photoUploaderFilter, setPhotoUploaderFilter] = useState("all");
@@ -406,12 +408,30 @@ export default function CameraAdminPage() {
     if (photoUploaderFilter === "all") return cameraPhotos;
     return cameraPhotos.filter((photo) => photo.uploaderName === photoUploaderFilter);
   }, [cameraPhotos, photoUploaderFilter]);
+  const selectedPhotoIdSet = useMemo(() => new Set(selectedPhotoIds), [selectedPhotoIds]);
+  const filteredCameraPhotoIds = useMemo(
+    () => filteredCameraPhotos.map((photo) => photo.id),
+    [filteredCameraPhotos],
+  );
+  const selectedFilteredPhotoIds = useMemo(
+    () => filteredCameraPhotoIds.filter((id) => selectedPhotoIdSet.has(id)),
+    [filteredCameraPhotoIds, selectedPhotoIdSet],
+  );
   const pagedCameraPhotos = useMemo(() => {
     const totalPages = Math.max(1, Math.ceil(filteredCameraPhotos.length / PHOTO_PAGE_SIZE));
     const safePage = Math.min(Math.max(1, photoPage), totalPages);
     const start = (safePage - 1) * PHOTO_PAGE_SIZE;
     return filteredCameraPhotos.slice(start, start + PHOTO_PAGE_SIZE);
   }, [filteredCameraPhotos, photoPage]);
+  const pagedCameraPhotoIds = useMemo(
+    () => pagedCameraPhotos.map((photo) => photo.id),
+    [pagedCameraPhotos],
+  );
+  const selectedPagedCount = useMemo(
+    () => pagedCameraPhotoIds.filter((id) => selectedPhotoIdSet.has(id)).length,
+    [pagedCameraPhotoIds, selectedPhotoIdSet],
+  );
+  const allPagedSelected = pagedCameraPhotoIds.length > 0 && selectedPagedCount === pagedCameraPhotoIds.length;
   const photoTotalPages = useMemo(
     () => Math.max(1, Math.ceil(filteredCameraPhotos.length / PHOTO_PAGE_SIZE)),
     [filteredCameraPhotos.length],
@@ -703,7 +723,12 @@ export default function CameraAdminPage() {
               : null,
         });
 
-        setCameraPhotos(Array.isArray(photosPayload.items) ? (photosPayload.items as CameraPhotoItem[]) : []);
+        const nextPhotos = Array.isArray(photosPayload.items)
+          ? (photosPayload.items as CameraPhotoItem[])
+          : [];
+        setCameraPhotos(nextPhotos);
+        const existingIds = new Set(nextPhotos.map((photo) => photo.id));
+        setSelectedPhotoIds((current) => current.filter((id) => existingIds.has(id)));
 
         const qrItems = Array.isArray(qrHistoryPayload.items)
           ? (qrHistoryPayload.items as CameraQrHistoryItem[])
@@ -788,6 +813,8 @@ export default function CameraAdminPage() {
     setConnected(false);
     setToken("");
     setCameraPhotos([]);
+    setSelectedPhotoIds([]);
+    setCameraBulkActionLoading("");
     setQrHistory([]);
     setQrActionsMenu(null);
     setQrBulkMenuOpen(false);
@@ -969,6 +996,40 @@ export default function CameraAdminPage() {
     }
   }
 
+  function togglePhotoSelection(id: string) {
+    setSelectedPhotoIds((current) =>
+      current.includes(id) ? current.filter((entry) => entry !== id) : [...current, id],
+    );
+  }
+
+  function toggleSelectAllPagedPhotos() {
+    const pageIds = pagedCameraPhotoIds;
+    if (pageIds.length < 1) return;
+    setSelectedPhotoIds((current) => {
+      const selected = new Set(current);
+      const isAllSelected = pageIds.every((id) => selected.has(id));
+      if (isAllSelected) {
+        pageIds.forEach((id) => selected.delete(id));
+      } else {
+        pageIds.forEach((id) => selected.add(id));
+      }
+      return Array.from(selected);
+    });
+  }
+
+  function selectAllFilteredPhotos() {
+    if (filteredCameraPhotoIds.length < 1) return;
+    setSelectedPhotoIds((current) => {
+      const selected = new Set(current);
+      filteredCameraPhotoIds.forEach((id) => selected.add(id));
+      return Array.from(selected);
+    });
+  }
+
+  function clearSelectedPhotos() {
+    setSelectedPhotoIds([]);
+  }
+
   async function moderatePhoto(
     id: string,
     action: "approve" | "hide" | "reject",
@@ -1007,6 +1068,82 @@ export default function CameraAdminPage() {
       });
     } finally {
       setCameraActionLoadingId("");
+    }
+  }
+
+  async function runBulkModeration(action: "approve" | "hide" | "reject") {
+    if (!token) return;
+    const targetIds = selectedFilteredPhotoIds;
+    if (targetIds.length < 1) {
+      toast("No selected photos", {
+        description: "Select at least one filtered photo first.",
+      });
+      return;
+    }
+
+    const rejectionReason =
+      action === "reject" ? window.prompt("Optional rejection reason for selected photos:", "") ?? "" : "";
+    const confirmed = window.confirm(
+      `Apply "${action.toUpperCase()}" to ${targetIds.length} selected photo${targetIds.length === 1 ? "" : "s"}?`,
+    );
+    if (!confirmed) return;
+
+    setCameraBulkActionLoading(`moderate-${action}`);
+    let successCount = 0;
+    let failedCount = 0;
+    const failedIds = new Set<string>();
+
+    try {
+      for (const id of targetIds) {
+        const { response, payload } = await fetchJsonWithRetry(
+          "/api/admin/camera/photo",
+          {
+            method: "PATCH",
+            headers: {
+              "Content-Type": "application/json",
+              "x-admin-token": token,
+            },
+            body: JSON.stringify({ id, action, rejectionReason }),
+          },
+          { maxAttempts: 3, baseDelayMs: 900 },
+        );
+
+        if (!response.ok) {
+          failedCount += 1;
+          failedIds.add(id);
+          continue;
+        }
+
+        const parsed = payload as JsonRecord;
+        if (!(parsed.ok as boolean | undefined)) {
+          failedCount += 1;
+          failedIds.add(id);
+          continue;
+        }
+
+        successCount += 1;
+      }
+
+      if (successCount > 0) {
+        await loadCameraData(token, { silent: true });
+      }
+
+      setSelectedPhotoIds(Array.from(failedIds));
+      if (failedCount > 0) {
+        toast("Bulk moderation complete", {
+          description: `${successCount} updated, ${failedCount} failed.`,
+        });
+      } else {
+        toast.success("Bulk moderation complete", {
+          description: `${successCount} photo${successCount === 1 ? "" : "s"} updated to ${action}.`,
+        });
+      }
+    } catch {
+      toast.error("Network error", {
+        description: "Unable to complete bulk moderation right now.",
+      });
+    } finally {
+      setCameraBulkActionLoading("");
     }
   }
 
@@ -1050,6 +1187,89 @@ export default function CameraAdminPage() {
       });
     } finally {
       setCameraActionLoadingId("");
+    }
+  }
+
+  async function runBulkDeletePhotos() {
+    if (!token) return;
+    const targetIds = selectedFilteredPhotoIds;
+    if (targetIds.length < 1) {
+      toast("No selected photos", {
+        description: "Select at least one filtered photo first.",
+      });
+      return;
+    }
+
+    const confirmPhrase = window.prompt(
+      `Delete ${targetIds.length} selected photos permanently.\nType DELETE to confirm:`,
+      "",
+    );
+    if ((confirmPhrase ?? "").trim().toUpperCase() !== "DELETE") {
+      toast("Bulk delete cancelled", {
+        description: "Confirmation phrase did not match.",
+      });
+      return;
+    }
+
+    setCameraBulkActionLoading("delete");
+    let successCount = 0;
+    let failedCount = 0;
+    const failedIds = new Set<string>();
+
+    try {
+      for (const id of targetIds) {
+        const { response, payload } = await fetchJsonWithRetry(
+          "/api/admin/camera/photo",
+          {
+            method: "DELETE",
+            headers: {
+              "Content-Type": "application/json",
+              "x-admin-token": token,
+            },
+            body: JSON.stringify({ id }),
+          },
+          { maxAttempts: 3, baseDelayMs: 900 },
+        );
+
+        if (!response.ok) {
+          failedCount += 1;
+          failedIds.add(id);
+          continue;
+        }
+
+        const parsed = payload as JsonRecord;
+        if (!(parsed.ok as boolean | undefined)) {
+          failedCount += 1;
+          failedIds.add(id);
+          continue;
+        }
+
+        successCount += 1;
+      }
+
+      if (successCount > 0) {
+        if (photoPreviewId && targetIds.includes(photoPreviewId) && !failedIds.has(photoPreviewId)) {
+          setPhotoPreviewId("");
+        }
+        await loadCameraData(token, { silent: true });
+      }
+
+      setSelectedPhotoIds(Array.from(failedIds));
+      if (failedCount > 0) {
+        toast("Bulk delete complete", {
+          description: `${successCount} deleted, ${failedCount} failed.`,
+        });
+      } else {
+        toast.success("Bulk delete complete", {
+          description: `${successCount} photo${successCount === 1 ? "" : "s"} deleted.`,
+        });
+      }
+    } catch {
+      toast.error("Network error", {
+        description: "Unable to complete bulk delete right now.",
+      });
+    } finally {
+      setCameraBulkActionLoading("");
     }
   }
 
@@ -2635,6 +2855,69 @@ export default function CameraAdminPage() {
                 Showing {filteredCameraPhotos.length} item(s)
               </p>
             </div>
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs text-[var(--ink-soft)]">
+                Selected: {selectedFilteredPhotoIds.length} / {filteredCameraPhotos.length}
+              </p>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  className="rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-2 py-1 text-[10px] uppercase tracking-[0.08em] disabled:opacity-50"
+                  onClick={toggleSelectAllPagedPhotos}
+                  disabled={pagedCameraPhotoIds.length < 1 || cameraBulkActionLoading !== ""}
+                >
+                  {allPagedSelected ? "Unselect Page" : "Select Page"}
+                </button>
+                <button
+                  type="button"
+                  className="rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-2 py-1 text-[10px] uppercase tracking-[0.08em] disabled:opacity-50"
+                  onClick={selectAllFilteredPhotos}
+                  disabled={filteredCameraPhotos.length < 1 || cameraBulkActionLoading !== ""}
+                >
+                  Select Filtered
+                </button>
+                <button
+                  type="button"
+                  className="rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-2 py-1 text-[10px] uppercase tracking-[0.08em] disabled:opacity-50"
+                  onClick={clearSelectedPhotos}
+                  disabled={selectedPhotoIds.length < 1 || cameraBulkActionLoading !== ""}
+                >
+                  Clear
+                </button>
+                <button
+                  type="button"
+                  className="rounded-md border border-[var(--success-border)] bg-[var(--success-soft)] px-2 py-1 text-[10px] uppercase tracking-[0.08em] text-[var(--success-text)] disabled:opacity-50"
+                  onClick={() => void runBulkModeration("approve")}
+                  disabled={selectedFilteredPhotoIds.length < 1 || cameraBulkActionLoading !== ""}
+                >
+                  {cameraBulkActionLoading === "moderate-approve" ? "Approving..." : "Bulk Approve"}
+                </button>
+                <button
+                  type="button"
+                  className="rounded-md border border-[var(--warn-border)] bg-[var(--warn-soft)] px-2 py-1 text-[10px] uppercase tracking-[0.08em] text-[var(--warn-text)] disabled:opacity-50"
+                  onClick={() => void runBulkModeration("hide")}
+                  disabled={selectedFilteredPhotoIds.length < 1 || cameraBulkActionLoading !== ""}
+                >
+                  {cameraBulkActionLoading === "moderate-hide" ? "Hiding..." : "Bulk Hide"}
+                </button>
+                <button
+                  type="button"
+                  className="rounded-md border border-[var(--error-border)] bg-[var(--error-soft)] px-2 py-1 text-[10px] uppercase tracking-[0.08em] text-[var(--error-text)] disabled:opacity-50"
+                  onClick={() => void runBulkModeration("reject")}
+                  disabled={selectedFilteredPhotoIds.length < 1 || cameraBulkActionLoading !== ""}
+                >
+                  {cameraBulkActionLoading === "moderate-reject" ? "Rejecting..." : "Bulk Reject"}
+                </button>
+                <button
+                  type="button"
+                  className="rounded-md border border-[var(--error-border)] bg-[var(--surface)] px-2 py-1 text-[10px] uppercase tracking-[0.08em] text-[var(--error-text)] disabled:opacity-50"
+                  onClick={() => void runBulkDeletePhotos()}
+                  disabled={selectedFilteredPhotoIds.length < 1 || cameraBulkActionLoading !== ""}
+                >
+                  {cameraBulkActionLoading === "delete" ? "Deleting..." : "Bulk Delete"}
+                </button>
+              </div>
+            </div>
             {cameraPhotos.length === 0 ? (
               <div className="mt-3 rounded-xl border border-dashed border-[var(--border)] bg-[var(--surface-2)] p-4 text-sm text-[var(--ink-soft)]">
                 No camera uploads yet.
@@ -2648,6 +2931,16 @@ export default function CameraAdminPage() {
                 <table className="min-w-full divide-y divide-[var(--border)] text-xs">
                   <thead className="bg-[var(--surface-2)] text-left text-[var(--ink-soft)]">
                     <tr>
+                      <th className="px-3 py-2 font-medium">
+                        <input
+                          type="checkbox"
+                          className="h-3.5 w-3.5 rounded border-[var(--border)] accent-[var(--accent)]"
+                          onChange={toggleSelectAllPagedPhotos}
+                          checked={allPagedSelected}
+                          disabled={pagedCameraPhotoIds.length < 1 || cameraBulkActionLoading !== ""}
+                          aria-label="Select all photos on current page"
+                        />
+                      </th>
                       <th className="px-3 py-2 font-medium">Photo</th>
                       <th className="px-3 py-2 font-medium">Uploader</th>
                       <th className="px-3 py-2 font-medium">Invite</th>
@@ -2660,6 +2953,16 @@ export default function CameraAdminPage() {
                   <tbody className="divide-y divide-[var(--border)] bg-[var(--surface)]">
                     {pagedCameraPhotos.map((photo) => (
                       <tr key={photo.id}>
+                        <td className="px-3 py-2 align-top">
+                          <input
+                            type="checkbox"
+                            className="mt-1 h-3.5 w-3.5 rounded border-[var(--border)] accent-[var(--accent)]"
+                            checked={selectedPhotoIdSet.has(photo.id)}
+                            onChange={() => togglePhotoSelection(photo.id)}
+                            disabled={cameraBulkActionLoading !== ""}
+                            aria-label={`Select photo by ${photo.uploaderName}`}
+                          />
+                        </td>
                         <td className="px-3 py-2">
                           <button
                             type="button"
@@ -2691,7 +2994,7 @@ export default function CameraAdminPage() {
                               type="button"
                               className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-[var(--success-border)] bg-[var(--success-soft)] text-[var(--success-text)] disabled:opacity-50"
                               onClick={() => void moderatePhoto(photo.id, "approve")}
-                              disabled={cameraActionLoadingId === photo.id}
+                              disabled={cameraActionLoadingId === photo.id || cameraBulkActionLoading !== ""}
                               title="Approve photo"
                               aria-label="Approve photo"
                             >
@@ -2703,7 +3006,7 @@ export default function CameraAdminPage() {
                               type="button"
                               className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-[var(--warn-border)] bg-[var(--warn-soft)] text-[var(--warn-text)] disabled:opacity-50"
                               onClick={() => void moderatePhoto(photo.id, "hide")}
-                              disabled={cameraActionLoadingId === photo.id}
+                              disabled={cameraActionLoadingId === photo.id || cameraBulkActionLoading !== ""}
                               title="Hide photo"
                               aria-label="Hide photo"
                             >
@@ -2715,7 +3018,7 @@ export default function CameraAdminPage() {
                               type="button"
                               className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-[var(--error-border)] bg-[var(--error-soft)] text-[var(--error-text)] disabled:opacity-50"
                               onClick={() => void moderatePhoto(photo.id, "reject")}
-                              disabled={cameraActionLoadingId === photo.id}
+                              disabled={cameraActionLoadingId === photo.id || cameraBulkActionLoading !== ""}
                               title="Reject photo"
                               aria-label="Reject photo"
                             >
@@ -2727,7 +3030,7 @@ export default function CameraAdminPage() {
                               type="button"
                               className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-[var(--error-border)] bg-[var(--surface)] text-[var(--error-text)] disabled:opacity-50"
                               onClick={() => void deletePhoto(photo.id)}
-                              disabled={cameraActionLoadingId === photo.id}
+                              disabled={cameraActionLoadingId === photo.id || cameraBulkActionLoading !== ""}
                               title="Delete photo"
                               aria-label="Delete photo"
                             >
@@ -3018,7 +3321,7 @@ export default function CameraAdminPage() {
                   type="button"
                   className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-[var(--success-border)] bg-[var(--success-soft)] text-[var(--success-text)] disabled:opacity-50"
                   onClick={() => void moderatePhoto(selectedCameraPhoto.id, "approve")}
-                  disabled={cameraActionLoadingId === selectedCameraPhoto.id}
+                  disabled={cameraActionLoadingId === selectedCameraPhoto.id || cameraBulkActionLoading !== ""}
                   title="Approve photo"
                   aria-label="Approve photo"
                 >
@@ -3030,7 +3333,7 @@ export default function CameraAdminPage() {
                   type="button"
                   className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-[var(--warn-border)] bg-[var(--warn-soft)] text-[var(--warn-text)] disabled:opacity-50"
                   onClick={() => void moderatePhoto(selectedCameraPhoto.id, "hide")}
-                  disabled={cameraActionLoadingId === selectedCameraPhoto.id}
+                  disabled={cameraActionLoadingId === selectedCameraPhoto.id || cameraBulkActionLoading !== ""}
                   title="Hide photo"
                   aria-label="Hide photo"
                 >
@@ -3042,7 +3345,7 @@ export default function CameraAdminPage() {
                   type="button"
                   className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-[var(--error-border)] bg-[var(--error-soft)] text-[var(--error-text)] disabled:opacity-50"
                   onClick={() => void moderatePhoto(selectedCameraPhoto.id, "reject")}
-                  disabled={cameraActionLoadingId === selectedCameraPhoto.id}
+                  disabled={cameraActionLoadingId === selectedCameraPhoto.id || cameraBulkActionLoading !== ""}
                   title="Reject photo"
                   aria-label="Reject photo"
                 >
@@ -3054,7 +3357,7 @@ export default function CameraAdminPage() {
                   type="button"
                   className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-[var(--error-border)] bg-[var(--surface)] text-[var(--error-text)] disabled:opacity-50"
                   onClick={() => void deletePhoto(selectedCameraPhoto.id)}
-                  disabled={cameraActionLoadingId === selectedCameraPhoto.id}
+                  disabled={cameraActionLoadingId === selectedCameraPhoto.id || cameraBulkActionLoading !== ""}
                   title="Delete photo"
                   aria-label="Delete photo"
                 >
