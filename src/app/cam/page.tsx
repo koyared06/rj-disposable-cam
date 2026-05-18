@@ -65,6 +65,7 @@ const MANILA_TIMEZONE = "Asia/Manila";
 const LOCAL_SHOTS_DB_NAME = "rj-camera-local-shots-v1";
 const LOCAL_SHOTS_STORE_NAME = "shots";
 const WATERMARK_JPEG_QUALITIES = [0.92, 0.86, 0.8, 0.74, 0.68] as const;
+const MIN_GUEST_NAME_LENGTH = 2;
 const AUTO_UPLOAD_MAX_RETRIES = 5;
 const AUTO_UPLOAD_RETRY_BASE_MS = 2500;
 const AUTO_UPLOAD_RETRY_MAX_MS = 30000;
@@ -471,6 +472,9 @@ export default function CameraLandingPage() {
   const latestLocalPreviewUrl =
     localShots.length > 0 ? localShots[localShots.length - 1]?.previewUrl ?? "" : "";
   const normalizedGuestName = uploaderName.trim();
+  const hasValidGuestName = normalizedGuestName.length >= MIN_GUEST_NAME_LENGTH;
+  const isGuestNameDraftValid =
+    guestNameDraft.trim().length >= MIN_GUEST_NAME_LENGTH;
   const isAdminViewer = Boolean(adminToken.trim());
 
   const stopCamera = useCallback((manualClose = false) => {
@@ -537,8 +541,8 @@ export default function CameraLandingPage() {
   const saveGuestName = useCallback(
     (inputName: string) => {
       const cleanName = inputName.trim().slice(0, 120);
-      if (!cleanName) {
-        setGuestNameError("Guest name is required.");
+      if (cleanName.length < MIN_GUEST_NAME_LENGTH) {
+        setGuestNameError(`Please enter at least ${MIN_GUEST_NAME_LENGTH} characters.`);
         setFeedback("Please enter your name before taking a photo.");
         return false;
       }
@@ -561,13 +565,13 @@ export default function CameraLandingPage() {
   );
 
   const ensureGuestName = useCallback(() => {
-    if (normalizedGuestName) return true;
-    setGuestNameDraft("");
-    setGuestNameError("Guest name is required.");
+    if (hasValidGuestName) return true;
+    setGuestNameDraft(normalizedGuestName || guestNameDraft);
+    setGuestNameError(`Please enter at least ${MIN_GUEST_NAME_LENGTH} characters.`);
     setShowGuestNameModal(true);
     setFeedback("Please enter your name before taking a photo.");
     return false;
-  }, [normalizedGuestName]);
+  }, [guestNameDraft, hasValidGuestName, normalizedGuestName]);
 
   const ensureWatermarkFontsLoaded = useCallback(async () => {
     if (watermarkFontsReadyRef.current) return;
@@ -1863,7 +1867,7 @@ export default function CameraLandingPage() {
       ? localShots.find((shot) => shot.id === activeLocalShotId) ?? null
       : null;
   const isGuestNameModalVisible =
-    showGuestNameModal || (!showLandingScreen && !normalizedGuestName);
+    showGuestNameModal || (!showLandingScreen && !hasValidGuestName);
 
   async function downloadFilteredGallery() {
     if (filteredGalleryItems.length === 0 || downloadingGallery) return;
@@ -1948,15 +1952,22 @@ export default function CameraLandingPage() {
                   >
                     Cancel
                   </button>
-                  <button
-                    type="button"
-                    className="rounded-lg bg-white px-3 py-2 text-sm font-semibold text-black"
-                    onClick={() => {
-                      setShowStartNotice(false);
-                      setStarted(true);
-                      setKeepCameraActive(true);
-                      void startCamera();
-                    }}
+              <button
+                type="button"
+                className="rounded-lg bg-white px-3 py-2 text-sm font-semibold text-black"
+                onClick={() => {
+                  if (!hasValidGuestName) {
+                    setShowGuestNameModal(true);
+                    setGuestNameError(
+                      `Please enter at least ${MIN_GUEST_NAME_LENGTH} characters.`,
+                    );
+                    return;
+                  }
+                  setShowStartNotice(false);
+                  setStarted(true);
+                  setKeepCameraActive(true);
+                  void startCamera();
+                }}
                   >
                     I Understand
                   </button>
@@ -2002,8 +2013,9 @@ export default function CameraLandingPage() {
               </button>
               <button
                 type="button"
-                className="flex h-12 w-12 items-center justify-center rounded-xl border border-white/30 bg-black/45 text-white"
+                className="flex h-12 w-12 items-center justify-center rounded-xl border border-white/30 bg-black/45 text-white disabled:opacity-40"
                 onClick={() => openUploadPicker()}
+                disabled={!hasValidGuestName}
                 aria-label="Upload photo"
               >
                 <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
@@ -2093,21 +2105,28 @@ export default function CameraLandingPage() {
                         if (guestNameError) setGuestNameError("");
                       }}
                       onInvalid={(event) =>
-                        event.currentTarget.setCustomValidity("Guest name is required.")
+                        event.currentTarget.setCustomValidity(
+                          `Please enter at least ${MIN_GUEST_NAME_LENGTH} characters.`,
+                        )
                       }
                       onInput={(event) => event.currentTarget.setCustomValidity("")}
                       placeholder="Enter your name"
                       maxLength={120}
+                      minLength={MIN_GUEST_NAME_LENGTH}
                       required
                       autoFocus
                     />
                   </label>
+                  <p className="mt-2 text-[11px] text-white/65">
+                    Use at least {MIN_GUEST_NAME_LENGTH} characters.
+                  </p>
                   {guestNameError ? (
                     <p className="mt-2 text-xs text-rose-300">{guestNameError}</p>
                   ) : null}
                   <button
                     type="submit"
-                    className="mt-4 w-full rounded-lg bg-white px-3 py-2 text-sm font-semibold text-black"
+                    className="mt-4 w-full rounded-lg bg-white px-3 py-2 text-sm font-semibold text-black disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={!isGuestNameDraftValid}
                   >
                     Continue
                   </button>
@@ -2277,7 +2296,7 @@ export default function CameraLandingPage() {
                     type="button"
                     className="absolute bottom-0 left-1/2 z-20 flex h-[5.4rem] w-[5.4rem] -translate-x-1/2 items-center justify-center rounded-full border-[2px] border-[#8a90ff] bg-white/10 shadow-[0_0_0_1px_rgba(255,255,255,0.35)_inset] disabled:opacity-40"
                     onClick={() => void captureShot()}
-                    disabled={!cameraOpen || !canCaptureMoreShots || cameraTransitioning}
+                    disabled={!cameraOpen || !canCaptureMoreShots || cameraTransitioning || !hasValidGuestName}
                     aria-label="Capture shot"
                   >
                     <span className="h-[4.95rem] w-[4.95rem] rounded-full bg-white" />
@@ -2359,19 +2378,20 @@ export default function CameraLandingPage() {
                         type="button"
                         className="rounded-full border border-emerald-300/40 bg-emerald-300/20 px-4 py-2 text-sm font-semibold text-emerald-100 disabled:opacity-40"
                         onClick={() => queueSelectedShotsForUpload()}
-                        disabled={selectedForUploadCount < 1}
+                        disabled={selectedForUploadCount < 1 || !hasValidGuestName}
                       >
                         Upload Selected ({selectedForUploadCount})
                       </button>
                       <button
                         type="button"
-                        className="rounded-full border border-white/25 bg-white/20 px-4 py-2 text-sm font-semibold text-white"
+                        className="rounded-full border border-white/25 bg-white/20 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
                         onClick={() => {
                           setShowGallerySheet(false);
                           setExpandedGalleryImage(null);
                           setActiveLocalShotId("");
                           openUploadPicker();
                         }}
+                        disabled={!hasValidGuestName}
                       >
                         Add From Files
                       </button>
