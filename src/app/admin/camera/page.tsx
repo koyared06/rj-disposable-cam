@@ -420,10 +420,13 @@ export default function CameraAdminPage() {
     () => (qrActionsMenu ? qrHistory.find((item) => item.id === qrActionsMenu.id) ?? null : null),
     [qrActionsMenu, qrHistory],
   );
-  const qrCenterTitlePreview = useMemo(
-    () => (settings.cameraEventTitle.trim() || "Guest Camera").slice(0, 26),
-    [settings.cameraEventTitle],
-  );
+  const qrCenterTitlePreview = useMemo(() => {
+    const resolved =
+      settings.cameraEventDisplayTitle.trim() ||
+      settings.cameraEventTitle.trim() ||
+      "Guest Camera";
+    return resolved.slice(0, 26);
+  }, [settings.cameraEventDisplayTitle, settings.cameraEventTitle]);
 
   const renderQrDataUrl = useCallback(async (url: string, width: number) => {
     const scriptFontFamilyRaw =
