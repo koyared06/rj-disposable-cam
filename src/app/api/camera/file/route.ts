@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { findCameraPhotoById } from "@/lib/camera-photos";
-import { isPhotoVisibleNow } from "@/lib/camera-visibility";
 import { isCameraQrTokenRevoked } from "@/lib/camera-qr-sessions";
 import { buildCameraUploaderCode, verifyCameraQrToken } from "@/lib/camera-qr";
 import { downloadDriveFile } from "@/lib/drive-camera";
@@ -91,7 +90,7 @@ export async function GET(request: NextRequest) {
         if (photo.status === "hidden" || photo.status === "rejected") {
           return NextResponse.json({ error: "Photo is not available." }, { status: 404 });
         }
-      } else if (!isPhotoVisibleNow(photo, new Date())) {
+      } else if (photo.status !== "approved") {
         return NextResponse.json({ error: "Photo is not visible yet." }, { status: 403 });
       }
     }

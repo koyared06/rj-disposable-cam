@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { readCameraPhotos } from "@/lib/camera-photos";
-import { isPhotoVisibleNow } from "@/lib/camera-visibility";
 import { isCameraQrTokenRevoked } from "@/lib/camera-qr-sessions";
 import { buildCameraUploaderCode, verifyCameraQrToken } from "@/lib/camera-qr";
 import { findGuestByInviteCredentials } from "@/lib/guest-access";
@@ -51,7 +50,6 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const now = new Date();
     const photos = await readCameraPhotos();
     const normalizedOwnCode = ownCode.trim().toLowerCase();
     const shotsUsed = ownCode
@@ -76,7 +74,9 @@ export async function GET(request: NextRequest) {
           return photo.status !== "rejected" && photo.status !== "hidden";
         }
 
-        return isPhotoVisibleNow(photo, now);
+        // Show all approved photos in guest gallery so POV lists and blurred previews
+        // remain complete even before reveal time.
+        return photo.status === "approved";
       })
       .map((photo) => {
         const isOwnPhoto =
