@@ -31,10 +31,24 @@ function buildDriveFileName(inviteCode: string, extension: string) {
 }
 
 function classifyUploadFailure(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error ?? "");
+  const unsafe = (error as {
+    status?: number | string;
+    code?: number | string;
+    response?: {
+      status?: number | string;
+      data?: { error?: { message?: string } | string };
+    };
+    message?: string;
+  } | null) ?? { };
+  const message = (error instanceof Error ? error.message : String(error ?? "")).trim();
   const responseStatus = Number(
-    (error as { response?: { status?: number } } | null)?.response?.status ?? 0,
+    unsafe.response?.status ?? unsafe.status ?? unsafe.code ?? 0,
   );
+  const responseErrorMessage =
+    typeof unsafe.response?.data?.error === "string"
+      ? unsafe.response?.data?.error
+      : unsafe.response?.data?.error?.message ?? "";
+  const normalized = `${message} ${responseErrorMessage}`.toLowerCase();
 
   if (message.includes("Missing GOOGLE_DRIVE_CAMERA_FOLDER_ID")) {
     return {
@@ -52,11 +66,13 @@ function classifyUploadFailure(error: unknown) {
 
   if (
     message.includes("CAMERA_WATERMARK_PROCESSING_FAILED") ||
-    message.includes("CAMERA_IMAGE_PROCESSING_FAILED")
+    message.includes("CAMERA_IMAGE_PROCESSING_FAILED") ||
+    normalized.includes("unsupported image format") ||
+    normalized.includes("input buffer contains unsupported image format")
   ) {
     return {
       code: "IMAGE_PROCESSING_FAILED",
-      hint: "Image processing failed. Check image format support and Vercel function logs.",
+      hint: "Image format is unsupported or corrupted. Use JPG/PNG, or capture directly in-app.",
     };
   }
 
@@ -71,6 +87,24 @@ function classifyUploadFailure(error: unknown) {
     return {
       code: "DRIVE_OR_SHEETS_PERMISSION_DENIED",
       hint: "Grant service account Editor access to Drive folder and Google Sheet.",
+    };
+  }
+
+  if (responseStatus === 401 || normalized.includes("invalid credentials")) {
+    return {
+      code: "GOOGLE_AUTH_FAILED",
+      hint: "Google service-account credentials are invalid/expired. Check Vercel env secrets.",
+    };
+  }
+
+  if (
+    responseStatus === 429 ||
+    normalized.includes("quota") ||
+    normalized.includes("rate limit")
+  ) {
+    return {
+      code: "GOOGLE_API_QUOTA",
+      hint: "Google API quota/rate limit reached. Retry later or reduce upload burst.",
     };
   }
 

@@ -689,7 +689,7 @@ export default function CameraLandingPage() {
           lastModified: Date.now(),
         });
       } catch {
-        return file;
+        return null;
       } finally {
         URL.revokeObjectURL(objectUrl);
       }
@@ -791,8 +791,12 @@ export default function CameraLandingPage() {
       });
       const payload = await response.json();
       if (!response.ok) {
+        const code =
+          typeof payload.errorCode === "string" && payload.errorCode
+            ? ` [${payload.errorCode}]`
+            : "";
         const hint = typeof payload.hint === "string" && payload.hint ? ` ${payload.hint}` : "";
-        setFeedback(`${payload.error ?? "Unable to upload."}${hint}`);
+        setFeedback(`${payload.error ?? "Unable to upload."}${code}${hint}`);
         if (payload.usage) {
           setUsage((current) => ({
             shotsUsed: Number(payload.usage.shotsUsed ?? current.shotsUsed),
@@ -1080,26 +1084,26 @@ export default function CameraLandingPage() {
     if (selected.length < 1) return;
     setFeedback("Applying watermark...");
     const processed: File[] = [];
-    let skippedTooLarge = 0;
+    let skippedCount = 0;
     for (const file of selected) {
       const item = await applyWatermarkToImageFile(file);
       if (!item) {
-        skippedTooLarge += 1;
+        skippedCount += 1;
         continue;
       }
       processed.push(item);
     }
     if (processed.length < 1) {
       setFeedback(
-        skippedTooLarge > 0
-          ? `Selected file(s) exceed max upload size (${settings.cameraMaxUploadMb} MB).`
+        skippedCount > 0
+          ? `Selected file(s) are unsupported or exceed ${settings.cameraMaxUploadMb} MB.`
           : "No valid image files to add.",
       );
       return;
     }
-    if (skippedTooLarge > 0) {
+    if (skippedCount > 0) {
       setFeedback(
-        `${processed.length} photo(s) added. ${skippedTooLarge} skipped (exceeds ${settings.cameraMaxUploadMb} MB).`,
+        `${processed.length} photo(s) added. ${skippedCount} skipped (unsupported or exceeds ${settings.cameraMaxUploadMb} MB).`,
       );
     }
     addLocalFilesBatch(processed);
@@ -1889,10 +1893,6 @@ export default function CameraLandingPage() {
                 Ends on {cameraEndsText}
               </p>
             </div>
-            <div className="pointer-events-none absolute inset-x-0 top-[8.5rem] z-10 px-6 text-center">
-              {feedback ? <p className="mt-1 text-xs text-amber-200">{feedback}</p> : null}
-            </div>
-
             <div className="absolute right-4 top-40 z-10 overflow-hidden rounded-[1.7rem] border border-white/20 bg-black/45 backdrop-blur-sm">
               <button
                 type="button"
@@ -2033,6 +2033,13 @@ export default function CameraLandingPage() {
 
             <div className="absolute inset-x-0 bottom-0 z-10 px-3 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
               <div className="w-full">
+                {feedback ? (
+                  <div className="mb-2 px-1 text-center">
+                    <p className="rounded-lg border border-amber-200/35 bg-black/45 px-2 py-1.5 text-xs text-amber-200">
+                      {feedback}
+                    </p>
+                  </div>
+                ) : null}
                 <div className="mb-3 grid grid-cols-[auto_1fr_auto] items-center gap-2">
                   <div className="flex justify-start">
                     <button
