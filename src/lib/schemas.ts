@@ -90,6 +90,9 @@ export const updateWeddingDateSchema = z.object({
   cameraLandingEnabled: z.boolean().optional(),
   cameraEventTitle: z.string().trim().max(120).optional().or(z.literal("")),
   cameraEventSubtitle: z.string().trim().max(240).optional().or(z.literal("")),
+  cameraEventDisplayTitle: z.string().trim().max(80).optional().or(z.literal("")),
+  cameraEventHashtag: z.string().trim().max(80).optional().or(z.literal("")),
+  cameraEventTagline: z.string().trim().max(120).optional().or(z.literal("")),
   cameraCoverImageUrl: z.string().trim().url().optional().or(z.literal("")),
   cameraStartButtonLabel: z.string().trim().max(40).optional().or(z.literal("")),
 });

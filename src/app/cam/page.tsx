@@ -13,6 +13,9 @@ type CameraSessionSettings = {
   cameraLandingEnabled: boolean;
   cameraEventTitle: string;
   cameraEventSubtitle: string;
+  cameraEventDisplayTitle: string;
+  cameraEventHashtag: string;
+  cameraEventTagline: string;
   cameraCoverImageUrl: string;
   cameraStartButtonLabel: string;
 };
@@ -60,6 +63,9 @@ const DEFAULT_SETTINGS: CameraSessionSettings = {
   cameraLandingEnabled: true,
   cameraEventTitle: "Guest Camera",
   cameraEventSubtitle: "Capture moments from our celebration.",
+  cameraEventDisplayTitle: "Red & Jess",
+  cameraEventHashtag: "#soaferRED-ynasiJESS",
+  cameraEventTagline: "Welcome to our Forever!",
   cameraCoverImageUrl: "",
   cameraStartButtonLabel: "Start Camera",
 };
@@ -120,6 +126,13 @@ function formatManilaDateTime(value: string) {
     minute: "2-digit",
     timeZone: MANILA_TIMEZONE,
   });
+}
+
+function formatEventHashtag(value: string, fallback = "#soaferRED-ynasiJESS") {
+  const trimmed = (value ?? "").trim();
+  const resolved = trimmed || fallback;
+  if (!resolved) return "";
+  return resolved.startsWith("#") ? resolved : `#${resolved}`;
 }
 
 type PersistedLocalShot = {
@@ -1039,10 +1052,12 @@ export default function CameraLandingPage() {
 
     try {
       setSharing(true);
+      const shareTitle =
+        settings.cameraEventDisplayTitle || settings.cameraEventTitle || "Guest Camera";
       if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
         await navigator.share({
-          title: settings.cameraEventTitle,
-          text: `Join ${settings.cameraEventTitle} camera`,
+          title: shareTitle,
+          text: `Join ${shareTitle} camera`,
           url: shareableCameraUrl,
         });
         return;
@@ -1146,6 +1161,12 @@ export default function CameraLandingPage() {
             cameraEventSubtitle:
               payload.settings?.cameraEventSubtitle ??
               "Capture moments from our celebration.",
+            cameraEventDisplayTitle:
+              payload.settings?.cameraEventDisplayTitle ?? "Red & Jess",
+            cameraEventHashtag:
+              payload.settings?.cameraEventHashtag ?? "#soaferRED-ynasiJESS",
+            cameraEventTagline:
+              payload.settings?.cameraEventTagline ?? "Welcome to our Forever!",
             cameraCoverImageUrl: payload.settings?.cameraCoverImageUrl ?? "",
             cameraStartButtonLabel:
               payload.settings?.cameraStartButtonLabel ?? "Start Camera",
@@ -1421,7 +1442,7 @@ export default function CameraLandingPage() {
     setDownloadingGallery(true);
 
     try {
-      const safeEvent = (settings.cameraEventTitle || "event")
+      const safeEvent = (settings.cameraEventDisplayTitle || settings.cameraEventTitle || "event")
         .replace(/[^a-z0-9-_]+/gi, "-")
         .replace(/^-+|-+$/g, "")
         .slice(0, 40)
@@ -1469,7 +1490,24 @@ export default function CameraLandingPage() {
           )}
           <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-black/40" />
           <div className="relative z-10 w-full max-w-md rounded-3xl border border-white/20 bg-black/40 p-5 backdrop-blur-sm">
-            <h1 className="mt-2 text-3xl font-semibold">{settings.cameraEventTitle}</h1>
+            <h1
+              className="mt-2 text-4xl leading-tight text-white"
+              style={{ fontFamily: "'Great Vibes', var(--font-script), 'Times New Roman', serif" }}
+            >
+              {settings.cameraEventDisplayTitle}
+            </h1>
+            <p
+              className="mt-1 text-lg italic text-white/90"
+              style={{ fontFamily: "'Cormorant Garamond', var(--font-display), 'Times New Roman', serif" }}
+            >
+              {settings.cameraEventTagline}
+            </p>
+            <p
+              className="mt-1 text-base italic text-white/85"
+              style={{ fontFamily: "'Cormorant Garamond', var(--font-display), 'Times New Roman', serif" }}
+            >
+              {formatEventHashtag(settings.cameraEventHashtag)}
+            </p>
             <p className="mt-2 text-sm text-white/80">{settings.cameraEventSubtitle}</p>
             <button
               type="button"
@@ -1571,13 +1609,19 @@ export default function CameraLandingPage() {
                 className="text-[2.25rem] leading-[1.15] tracking-[0.01em] text-white drop-shadow-lg"
                 style={{ fontFamily: "'Great Vibes', var(--font-script), 'Times New Roman', serif" }}
               >
-                {settings.cameraEventTitle}
+                {settings.cameraEventDisplayTitle}
               </p>
               <p
                 className="mt-1 text-[1.75rem] italic leading-[1.1] text-white/90 drop-shadow"
-                style={{ fontFamily: "var(--font-display), 'Times New Roman', serif" }}
+                style={{ fontFamily: "'Cormorant Garamond', var(--font-display), 'Times New Roman', serif" }}
               >
-                #soaferRED-ynasiJESS
+                {formatEventHashtag(settings.cameraEventHashtag)}
+              </p>
+              <p
+                className="mt-1 text-sm italic text-white/80 drop-shadow"
+                style={{ fontFamily: "'Cormorant Garamond', var(--font-display), 'Times New Roman', serif" }}
+              >
+                {settings.cameraEventTagline}
               </p>
               <p className="mt-1 text-xs font-medium text-white/70 drop-shadow">
                 Ends on {cameraEndsText}
@@ -1878,7 +1922,7 @@ export default function CameraLandingPage() {
                   </div>
                   <div className="pointer-events-none absolute inset-x-4 bottom-4">
                     <p className="text-3xl font-semibold text-white drop-shadow">
-                      {settings.cameraEventTitle}
+                      {settings.cameraEventDisplayTitle}
                     </p>
                     <p className="mt-1 text-sm text-white/80">
                       {capturerOptions.length} participant

@@ -16,6 +16,9 @@ type CameraSettings = {
   cameraLandingEnabled: boolean;
   cameraEventTitle: string;
   cameraEventSubtitle: string;
+  cameraEventDisplayTitle: string;
+  cameraEventHashtag: string;
+  cameraEventTagline: string;
   cameraCoverImageUrl: string;
   cameraStartButtonLabel: string;
   countdownDays: number | null;
@@ -90,6 +93,13 @@ function formatPhotoRevealTimestamp(dateValue: string, timeValue: string) {
     return safeTime;
   }
   return "Not set";
+}
+
+function formatEventHashtag(value: string, fallback = "#soaferRED-ynasiJESS") {
+  const trimmed = (value ?? "").trim();
+  const resolved = trimmed || fallback;
+  if (!resolved) return "";
+  return resolved.startsWith("#") ? resolved : `#${resolved}`;
 }
 
 function sanitizeFileNameSegment(value: string) {
@@ -298,7 +308,6 @@ export default function CameraAdminPage() {
   const [cameraActionLoadingId, setCameraActionLoadingId] = useState("");
   const [qrEventId, setQrEventId] = useState("RJ2026");
   const [qrTableCode, setQrTableCode] = useState("");
-  const [qrCenterTitle, setQrCenterTitle] = useState("Red & Jess");
   const [qrExpiresHours, setQrExpiresHours] = useState("48");
   const [qrGenerating, setQrGenerating] = useState(false);
   const [qrUrl, setQrUrl] = useState("");
@@ -333,6 +342,9 @@ export default function CameraAdminPage() {
     cameraLandingEnabled: true,
     cameraEventTitle: "Guest Camera",
     cameraEventSubtitle: "Capture moments from our celebration.",
+    cameraEventDisplayTitle: "Red & Jess",
+    cameraEventHashtag: "#soaferRED-ynasiJESS",
+    cameraEventTagline: "Welcome to our Forever!",
     cameraCoverImageUrl: "",
     cameraStartButtonLabel: "Start Camera",
     countdownDays: null,
@@ -408,7 +420,10 @@ export default function CameraAdminPage() {
     () => (qrActionsMenu ? qrHistory.find((item) => item.id === qrActionsMenu.id) ?? null : null),
     [qrActionsMenu, qrHistory],
   );
-  const qrCenterTitlePreview = useMemo(() => qrCenterTitle.trim().slice(0, 26), [qrCenterTitle]);
+  const qrCenterTitlePreview = useMemo(
+    () => (settings.cameraEventDisplayTitle.trim() || "Red & Jess").slice(0, 26),
+    [settings.cameraEventDisplayTitle],
+  );
 
   const renderQrDataUrl = useCallback(async (url: string, width: number) => {
     const scriptFontFamilyRaw =
@@ -671,6 +686,12 @@ export default function CameraAdminPage() {
           cameraEventSubtitle:
             (loadedSettings.cameraEventSubtitle as string | undefined) ??
             "Capture moments from our celebration.",
+          cameraEventDisplayTitle:
+            (loadedSettings.cameraEventDisplayTitle as string | undefined) ?? "Red & Jess",
+          cameraEventHashtag:
+            (loadedSettings.cameraEventHashtag as string | undefined) ?? "#soaferRED-ynasiJESS",
+          cameraEventTagline:
+            (loadedSettings.cameraEventTagline as string | undefined) ?? "Welcome to our Forever!",
           cameraCoverImageUrl: (loadedSettings.cameraCoverImageUrl as string | undefined) ?? "",
           cameraStartButtonLabel: (loadedSettings.cameraStartButtonLabel as string | undefined) ?? "Start Camera",
           countdownDays:
@@ -797,6 +818,9 @@ export default function CameraAdminPage() {
             cameraLandingEnabled: settings.cameraLandingEnabled,
             cameraEventTitle: settings.cameraEventTitle.trim(),
             cameraEventSubtitle: settings.cameraEventSubtitle.trim(),
+            cameraEventDisplayTitle: settings.cameraEventDisplayTitle.trim(),
+            cameraEventHashtag: settings.cameraEventHashtag.trim(),
+            cameraEventTagline: settings.cameraEventTagline.trim(),
             cameraCoverImageUrl: settings.cameraCoverImageUrl.trim(),
             cameraStartButtonLabel: settings.cameraStartButtonLabel.trim(),
           }),
@@ -831,6 +855,12 @@ export default function CameraAdminPage() {
         cameraEventTitle: (payloadSettings.cameraEventTitle as string | undefined) ?? current.cameraEventTitle,
         cameraEventSubtitle:
           (payloadSettings.cameraEventSubtitle as string | undefined) ?? current.cameraEventSubtitle,
+        cameraEventDisplayTitle:
+          (payloadSettings.cameraEventDisplayTitle as string | undefined) ?? current.cameraEventDisplayTitle,
+        cameraEventHashtag:
+          (payloadSettings.cameraEventHashtag as string | undefined) ?? current.cameraEventHashtag,
+        cameraEventTagline:
+          (payloadSettings.cameraEventTagline as string | undefined) ?? current.cameraEventTagline,
         cameraCoverImageUrl: (payloadSettings.cameraCoverImageUrl as string | undefined) ?? current.cameraCoverImageUrl,
         cameraStartButtonLabel:
           (payloadSettings.cameraStartButtonLabel as string | undefined) ?? current.cameraStartButtonLabel,
@@ -1270,9 +1300,9 @@ export default function CameraAdminPage() {
     url: string;
     dataUrl: string;
   }) {
-    const printCodeTitle = escapeHtml("Red & Jess");
-    const printCodeSubtitle = escapeHtml("Welcome to our Forever!");
-    const printHashtag = escapeHtml("#soaferRED-ynasiJESS");
+    const printCodeTitle = escapeHtml(settings.cameraEventDisplayTitle.trim() || "Red & Jess");
+    const printCodeSubtitle = escapeHtml(settings.cameraEventTagline.trim() || "Welcome to our Forever!");
+    const printHashtag = escapeHtml(formatEventHashtag(settings.cameraEventHashtag));
     const photoRevealAt = escapeHtml(
       formatPhotoRevealTimestamp(settings.cameraGalleryUnlockDate, settings.cameraGalleryUnlockTime),
     );
@@ -1406,9 +1436,9 @@ export default function CameraAdminPage() {
     copies?: number;
     layout?: "cards" | "poster";
   }) {
-    const titleText = escapeHtml("Red & Jess");
-    const subtitleText = escapeHtml("Welcome to our Forever!");
-    const hashtagText = escapeHtml("#soaferRED-ynasiJESS");
+    const titleText = escapeHtml(settings.cameraEventDisplayTitle.trim() || "Red & Jess");
+    const subtitleText = escapeHtml(settings.cameraEventTagline.trim() || "Welcome to our Forever!");
+    const hashtagText = escapeHtml(formatEventHashtag(settings.cameraEventHashtag));
     const photoRevealAt = escapeHtml(
       formatPhotoRevealTimestamp(settings.cameraGalleryUnlockDate, settings.cameraGalleryUnlockTime),
     );
@@ -2150,6 +2180,49 @@ export default function CameraAdminPage() {
                   }
                 />
               </label>
+              <label className="flex w-full flex-col gap-1 text-sm text-[var(--info-text)] sm:col-span-2">
+                <span>Event Display Title (QR + Camera)</span>
+                <input
+                  className="rounded-lg border border-[var(--info-border)] bg-[var(--surface)] px-3 py-2"
+                  value={settings.cameraEventDisplayTitle}
+                  maxLength={80}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      cameraEventDisplayTitle: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <label className="flex w-full flex-col gap-1 text-sm text-[var(--info-text)] sm:col-span-2">
+                <span>Event Tagline (QR + Camera)</span>
+                <input
+                  className="rounded-lg border border-[var(--info-border)] bg-[var(--surface)] px-3 py-2"
+                  value={settings.cameraEventTagline}
+                  maxLength={120}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      cameraEventTagline: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <label className="flex w-full flex-col gap-1 text-sm text-[var(--info-text)] sm:col-span-2 xl:col-span-3">
+                <span>Event Hashtag (QR + Camera)</span>
+                <input
+                  className="rounded-lg border border-[var(--info-border)] bg-[var(--surface)] px-3 py-2"
+                  value={settings.cameraEventHashtag}
+                  maxLength={80}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      cameraEventHashtag: event.target.value,
+                    }))
+                  }
+                  placeholder="#soaferRED-ynasiJESS"
+                />
+              </label>
               <div className="flex w-full flex-col gap-2 text-sm text-[var(--info-text)] sm:col-span-2 xl:col-span-3">
                 <span>Landing Cover Image</span>
                 <div className="flex flex-col gap-2 rounded-lg border border-[var(--info-border)] bg-[var(--surface)] p-3">
@@ -2236,6 +2309,24 @@ export default function CameraAdminPage() {
                             {settings.cameraEventSubtitle.trim() ||
                               "Capture moments from our celebration."}
                           </p>
+                          <p
+                            className="mt-3 text-3xl leading-tight text-white"
+                            style={{ fontFamily: "'Great Vibes', var(--font-script), 'Times New Roman', serif" }}
+                          >
+                            {settings.cameraEventDisplayTitle.trim() || "Red & Jess"}
+                          </p>
+                          <p
+                            className="mt-1 text-base italic text-white/90"
+                            style={{ fontFamily: "'Cormorant Garamond', var(--font-display), 'Times New Roman', serif" }}
+                          >
+                            {settings.cameraEventTagline.trim() || "Welcome to our Forever!"}
+                          </p>
+                          <p
+                            className="mt-1 text-sm italic text-white/80"
+                            style={{ fontFamily: "'Cormorant Garamond', var(--font-display), 'Times New Roman', serif" }}
+                          >
+                            {formatEventHashtag(settings.cameraEventHashtag)}
+                          </p>
                           <button
                             type="button"
                             className="mt-4 w-full rounded-full bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-black"
@@ -2282,7 +2373,7 @@ export default function CameraAdminPage() {
               Leave code blank for one universal event QR (recommended).
             </p>
 
-            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <label className="flex flex-col gap-1 text-sm text-[var(--ink-soft)]">
                 <span>Event ID</span>
                 <input
@@ -2311,16 +2402,6 @@ export default function CameraAdminPage() {
                   onChange={(event) => setQrExpiresHours(event.target.value)}
                 />
               </label>
-              <label className="flex flex-col gap-1 text-sm text-[var(--ink-soft)]">
-                <span>QR Center Title (optional)</span>
-                <input
-                  className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2"
-                  value={qrCenterTitle}
-                  maxLength={26}
-                  onChange={(event) => setQrCenterTitle(event.target.value)}
-                  placeholder="Red & Jess"
-                />
-              </label>
               <div className="flex items-end">
                 <button
                   type="button"
@@ -2333,7 +2414,7 @@ export default function CameraAdminPage() {
               </div>
             </div>
             <p className="mt-2 text-[11px] text-[var(--ink-soft)]">
-              Keep center title short for best scan reliability (recommended: 4-18 characters).
+              QR center title now follows Event Display Title from Camera Settings.
             </p>
 
             {qrUrl ? (

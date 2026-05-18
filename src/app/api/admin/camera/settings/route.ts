@@ -32,6 +32,9 @@ export async function GET(request: NextRequest) {
         cameraLandingEnabled: settings.cameraLandingEnabled,
         cameraEventTitle: settings.cameraEventTitle,
         cameraEventSubtitle: settings.cameraEventSubtitle,
+        cameraEventDisplayTitle: settings.cameraEventDisplayTitle,
+        cameraEventHashtag: settings.cameraEventHashtag,
+        cameraEventTagline: settings.cameraEventTagline,
         cameraCoverImageUrl: normalizedCoverUrl,
         cameraStartButtonLabel: settings.cameraStartButtonLabel,
         cameraLastQrEventId: settings.cameraLastQrEventId,
@@ -108,6 +111,12 @@ export async function PATCH(request: NextRequest) {
         parsed.data.cameraEventTitle ?? currentSettings.cameraEventTitle,
       cameraEventSubtitle:
         parsed.data.cameraEventSubtitle ?? currentSettings.cameraEventSubtitle,
+      cameraEventDisplayTitle:
+        parsed.data.cameraEventDisplayTitle ?? currentSettings.cameraEventDisplayTitle,
+      cameraEventHashtag:
+        parsed.data.cameraEventHashtag ?? currentSettings.cameraEventHashtag,
+      cameraEventTagline:
+        parsed.data.cameraEventTagline ?? currentSettings.cameraEventTagline,
       cameraCoverImageUrl: normalizedCoverUrl,
       cameraStartButtonLabel:
         parsed.data.cameraStartButtonLabel ??
@@ -133,6 +142,9 @@ export async function PATCH(request: NextRequest) {
         cameraLandingEnabled: updated.cameraLandingEnabled,
         cameraEventTitle: updated.cameraEventTitle,
         cameraEventSubtitle: updated.cameraEventSubtitle,
+        cameraEventDisplayTitle: updated.cameraEventDisplayTitle,
+        cameraEventHashtag: updated.cameraEventHashtag,
+        cameraEventTagline: updated.cameraEventTagline,
         cameraCoverImageUrl: updated.cameraCoverImageUrl,
         cameraStartButtonLabel: updated.cameraStartButtonLabel,
         cameraLastQrEventId: updated.cameraLastQrEventId,

@@ -18,6 +18,9 @@ const CAMERA_SHOT_LIMIT_PER_INVITE_KEY = "cameraShotLimitPerInvite";
 const CAMERA_LANDING_ENABLED_KEY = "cameraLandingEnabled";
 const CAMERA_EVENT_TITLE_KEY = "cameraEventTitle";
 const CAMERA_EVENT_SUBTITLE_KEY = "cameraEventSubtitle";
+const CAMERA_EVENT_DISPLAY_TITLE_KEY = "cameraEventDisplayTitle";
+const CAMERA_EVENT_HASHTAG_KEY = "cameraEventHashtag";
+const CAMERA_EVENT_TAGLINE_KEY = "cameraEventTagline";
 const CAMERA_COVER_IMAGE_URL_KEY = "cameraCoverImageUrl";
 const CAMERA_START_BUTTON_LABEL_KEY = "cameraStartButtonLabel";
 const CAMERA_LAST_QR_EVENT_ID_KEY = "cameraLastQrEventId";
@@ -31,6 +34,9 @@ const DEFAULT_CAMERA_MAX_UPLOAD_MB = 3;
 const DEFAULT_CAMERA_SHOT_LIMIT = 27;
 const DEFAULT_CAMERA_EVENT_TITLE = "Guest Camera";
 const DEFAULT_CAMERA_EVENT_SUBTITLE = "Capture moments from our celebration.";
+const DEFAULT_CAMERA_EVENT_DISPLAY_TITLE = "Red & Jess";
+const DEFAULT_CAMERA_EVENT_HASHTAG = "#soaferRED-ynasiJESS";
+const DEFAULT_CAMERA_EVENT_TAGLINE = "Welcome to our Forever!";
 const DEFAULT_CAMERA_START_BUTTON_LABEL = "Start Camera";
 const DEFAULT_CAMERA_QR_EXPIRY_HOURS = 48;
 
@@ -47,6 +53,9 @@ export type WeddingSettings = {
   cameraLandingEnabled: boolean;
   cameraEventTitle: string;
   cameraEventSubtitle: string;
+  cameraEventDisplayTitle: string;
+  cameraEventHashtag: string;
+  cameraEventTagline: string;
   cameraCoverImageUrl: string;
   cameraStartButtonLabel: string;
   cameraLastQrEventId: string;
@@ -132,6 +141,21 @@ export async function readWeddingSettings(): Promise<WeddingSettings> {
         DEFAULT_CAMERA_EVENT_SUBTITLE,
         240,
       ),
+      cameraEventDisplayTitle: parseCameraDisplayText(
+        normalized.get(CAMERA_EVENT_DISPLAY_TITLE_KEY) ?? "",
+        DEFAULT_CAMERA_EVENT_DISPLAY_TITLE,
+        80,
+      ),
+      cameraEventHashtag: parseCameraHashtag(
+        normalized.get(CAMERA_EVENT_HASHTAG_KEY) ?? "",
+        DEFAULT_CAMERA_EVENT_HASHTAG,
+        80,
+      ),
+      cameraEventTagline: parseCameraDisplayText(
+        normalized.get(CAMERA_EVENT_TAGLINE_KEY) ?? "",
+        DEFAULT_CAMERA_EVENT_TAGLINE,
+        120,
+      ),
       cameraCoverImageUrl: parseCameraUrl(normalized.get(CAMERA_COVER_IMAGE_URL_KEY) ?? ""),
       cameraStartButtonLabel: parseCameraDisplayText(
         normalized.get(CAMERA_START_BUTTON_LABEL_KEY) ?? "",
@@ -162,6 +186,9 @@ export async function readWeddingSettings(): Promise<WeddingSettings> {
         cameraLandingEnabled: true,
         cameraEventTitle: DEFAULT_CAMERA_EVENT_TITLE,
         cameraEventSubtitle: DEFAULT_CAMERA_EVENT_SUBTITLE,
+        cameraEventDisplayTitle: DEFAULT_CAMERA_EVENT_DISPLAY_TITLE,
+        cameraEventHashtag: DEFAULT_CAMERA_EVENT_HASHTAG,
+        cameraEventTagline: DEFAULT_CAMERA_EVENT_TAGLINE,
         cameraCoverImageUrl: "",
         cameraStartButtonLabel: DEFAULT_CAMERA_START_BUTTON_LABEL,
         cameraLastQrEventId: "",
@@ -220,6 +247,30 @@ export async function saveWeddingSettings(settings: WeddingSettings) {
         settings.cameraEventSubtitle,
         DEFAULT_CAMERA_EVENT_SUBTITLE,
         240,
+      ),
+    ],
+    [
+      CAMERA_EVENT_DISPLAY_TITLE_KEY,
+      parseCameraDisplayText(
+        settings.cameraEventDisplayTitle,
+        DEFAULT_CAMERA_EVENT_DISPLAY_TITLE,
+        80,
+      ),
+    ],
+    [
+      CAMERA_EVENT_HASHTAG_KEY,
+      parseCameraHashtag(
+        settings.cameraEventHashtag,
+        DEFAULT_CAMERA_EVENT_HASHTAG,
+        80,
+      ),
+    ],
+    [
+      CAMERA_EVENT_TAGLINE_KEY,
+      parseCameraDisplayText(
+        settings.cameraEventTagline,
+        DEFAULT_CAMERA_EVENT_TAGLINE,
+        120,
       ),
     ],
     [CAMERA_COVER_IMAGE_URL_KEY, parseCameraUrl(settings.cameraCoverImageUrl)],
@@ -316,6 +367,18 @@ function parseCameraDisplayText(
   const trimmed = (value ?? "").trim();
   if (!trimmed) return fallback;
   return trimmed.slice(0, maxLength);
+}
+
+function parseCameraHashtag(
+  value: string,
+  fallback: string,
+  maxLength: number,
+): string {
+  const trimmed = (value ?? "").trim();
+  const base = trimmed || fallback;
+  if (!base) return "";
+  const normalized = base.startsWith("#") ? base : `#${base}`;
+  return normalized.slice(0, maxLength);
 }
 
 function parseCameraUrl(value: string): string {
