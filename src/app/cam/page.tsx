@@ -18,6 +18,8 @@ type CameraSessionSettings = {
   cameraEventTagline: string;
   cameraCoverImageUrl: string;
   cameraStartButtonLabel: string;
+  weddingDate: string;
+  weddingTime: string;
 };
 
 type CameraGalleryItem = {
@@ -68,6 +70,8 @@ const DEFAULT_SETTINGS: CameraSessionSettings = {
   cameraEventTagline: "Welcome to our Forever!",
   cameraCoverImageUrl: "",
   cameraStartButtonLabel: "Start Camera",
+  weddingDate: "",
+  weddingTime: "",
 };
 
 function makeDeviceStorageKey(eventId: string) {
@@ -133,6 +137,52 @@ function formatEventHashtag(value: string, fallback = "#soaferRED-ynasiJESS") {
   const resolved = trimmed || fallback;
   if (!resolved) return "";
   return resolved.startsWith("#") ? resolved : `#${resolved}`;
+}
+
+function formatEventDateLabel(weddingDate: string, weddingTime: string) {
+  const date = (weddingDate ?? "").trim();
+  if (!date) return "";
+  const time = (weddingTime ?? "").trim() || "00:00";
+  const parsed = new Date(`${date}T${time}:00`);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return parsed.toLocaleDateString("en-PH", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    timeZone: MANILA_TIMEZONE,
+  });
+}
+
+function formatShotTimeLabel(shotAt: Date) {
+  return shotAt.toLocaleTimeString("en-PH", {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+    timeZone: MANILA_TIMEZONE,
+  });
+}
+
+function drawRoundedRect(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+) {
+  const safeRadius = Math.max(0, Math.min(radius, width / 2, height / 2));
+  context.beginPath();
+  context.moveTo(x + safeRadius, y);
+  context.lineTo(x + width - safeRadius, y);
+  context.quadraticCurveTo(x + width, y, x + width, y + safeRadius);
+  context.lineTo(x + width, y + height - safeRadius);
+  context.quadraticCurveTo(x + width, y + height, x + width - safeRadius, y + height);
+  context.lineTo(x + safeRadius, y + height);
+  context.quadraticCurveTo(x, y + height, x, y + height - safeRadius);
+  context.lineTo(x, y + safeRadius);
+  context.quadraticCurveTo(x, y, x + safeRadius, y);
+  context.closePath();
 }
 
 type PersistedLocalShot = {
@@ -332,6 +382,7 @@ export default function CameraLandingPage() {
   const queueProcessingRef = useRef(false);
   const mountedRef = useRef(true);
   const localShotsScopeRef = useRef("");
+  const watermarkFontsReadyRef = useRef(false);
 
   const pendingUploads = localShots.filter(
     (shot) => shot.status === "queued" || shot.status === "uploading",
@@ -460,6 +511,172 @@ export default function CameraLandingPage() {
     setFeedback("Please enter your name before taking a photo.");
     return false;
   }, [normalizedGuestName]);
+
+  const ensureWatermarkFontsLoaded = useCallback(async () => {
+    if (watermarkFontsReadyRef.current) return;
+    if (typeof document === "undefined" || !document.fonts) {
+      watermarkFontsReadyRef.current = true;
+      return;
+    }
+
+    try {
+      await Promise.all([
+        document.fonts.load(`400 32px "Great Vibes"`),
+        document.fonts.load(`italic 400 22px "Cormorant Garamond"`),
+      ]);
+      await document.fonts.ready;
+    } catch {
+      // Fallback to system fonts if custom fonts fail to load.
+    } finally {
+      watermarkFontsReadyRef.current = true;
+    }
+  }, []);
+
+  const drawShotWatermark = useCallback(
+    (context: CanvasRenderingContext2D, width: number, height: number, shotAt: Date) => {
+      const eventTitle = (settings.cameraEventTitle || "Guest Camera").trim().slice(0, 48);
+      const hashtag = formatEventHashtag(settings.cameraEventHashtag).slice(0, 60);
+      const eventDate =
+        formatEventDateLabel(
+          settings.weddingDate || settings.cameraGalleryUnlockDate,
+          settings.weddingTime || settings.cameraGalleryUnlockTime,
+        ) || "Event Date";
+      const shotTime = formatShotTimeLabel(shotAt);
+
+      const pad = Math.max(10, Math.round(width * 0.018));
+      const left = Math.max(10, Math.round(width * 0.026));
+      const blockBottom = height - Math.max(12, Math.round(height * 0.03));
+
+      const titleSize = Math.max(20, Math.min(46, Math.round(width * 0.048)));
+      const hashSize = Math.max(13, Math.min(24, Math.round(width * 0.024)));
+      const dateSize = Math.max(11, Math.min(20, Math.round(width * 0.019)));
+      const timeSize = Math.max(11, Math.min(20, Math.round(width * 0.02)));
+
+      context.save();
+      context.textAlign = "left";
+      context.textBaseline = "alphabetic";
+
+      context.font = `400 ${titleSize}px "Great Vibes", "Times New Roman", serif`;
+      const titleWidth = context.measureText(eventTitle).width;
+      context.font = `italic 400 ${hashSize}px "Cormorant Garamond", "Times New Roman", serif`;
+      const hashWidth = context.measureText(hashtag).width;
+      context.font = `500 ${dateSize}px Arial, sans-serif`;
+      const dateWidth = context.measureText(eventDate).width;
+
+      const blockWidth = Math.max(titleWidth, hashWidth, dateWidth) + pad * 2;
+      const lineGap = Math.max(3, Math.round(hashSize * 0.16));
+      const line1Height = Math.round(titleSize * 1.02);
+      const line2Height = Math.round(hashSize * 1.03);
+      const line3Height = Math.round(dateSize * 1.05);
+      const blockHeight = pad * 2 + line1Height + lineGap + line2Height + lineGap + line3Height;
+      const blockTop = blockBottom - blockHeight;
+
+      drawRoundedRect(
+        context,
+        left,
+        blockTop,
+        blockWidth,
+        blockHeight,
+        Math.max(8, Math.round(blockHeight * 0.11)),
+      );
+      context.fillStyle = "rgba(0,0,0,0.28)";
+      context.fill();
+
+      const textX = left + pad;
+      let textY = blockTop + pad + line1Height;
+
+      context.fillStyle = "rgba(255,245,232,0.96)";
+      context.shadowColor = "rgba(0,0,0,0.35)";
+      context.shadowBlur = Math.max(2, Math.round(width * 0.003));
+      context.font = `400 ${titleSize}px "Great Vibes", "Times New Roman", serif`;
+      context.fillText(eventTitle, textX, textY);
+
+      textY += lineGap + line2Height;
+      context.shadowBlur = Math.max(1, Math.round(width * 0.0025));
+      context.font = `italic 400 ${hashSize}px "Cormorant Garamond", "Times New Roman", serif`;
+      context.fillStyle = "rgba(246,236,224,0.95)";
+      context.fillText(hashtag, textX, textY);
+
+      textY += lineGap + line3Height;
+      context.shadowBlur = 0;
+      context.font = `500 ${dateSize}px Arial, sans-serif`;
+      context.fillStyle = "rgba(255,255,255,0.9)";
+      context.fillText(eventDate, textX, textY);
+
+      const timePadX = Math.max(8, Math.round(width * 0.014));
+      const timePadY = Math.max(6, Math.round(width * 0.01));
+      context.font = `600 ${timeSize}px Arial, sans-serif`;
+      const timeWidth = context.measureText(shotTime).width;
+      const timeBoxWidth = timeWidth + timePadX * 2;
+      const timeBoxHeight = timeSize + timePadY * 2;
+      const timeX = width - left - timeBoxWidth;
+      const timeY = height - Math.max(10, Math.round(height * 0.026)) - timeBoxHeight;
+
+      drawRoundedRect(
+        context,
+        timeX,
+        timeY,
+        timeBoxWidth,
+        timeBoxHeight,
+        Math.max(8, Math.round(timeBoxHeight * 0.35)),
+      );
+      context.fillStyle = "rgba(0,0,0,0.3)";
+      context.fill();
+      context.fillStyle = "rgba(255,255,255,0.92)";
+      context.textBaseline = "middle";
+      context.fillText(shotTime, timeX + timePadX, timeY + timeBoxHeight / 2 + 0.5);
+
+      context.restore();
+    },
+    [
+      settings.cameraEventHashtag,
+      settings.cameraEventTitle,
+      settings.weddingDate,
+      settings.weddingTime,
+      settings.cameraGalleryUnlockDate,
+      settings.cameraGalleryUnlockTime,
+    ],
+  );
+
+  const applyWatermarkToImageFile = useCallback(
+    async (file: File) => {
+      await ensureWatermarkFontsLoaded();
+
+      const objectUrl = URL.createObjectURL(file);
+      try {
+        const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+          const element = new Image();
+          element.onload = () => resolve(element);
+          element.onerror = () => reject(new Error("Unable to read selected image."));
+          element.src = objectUrl;
+        });
+
+        const canvas = document.createElement("canvas");
+        canvas.width = image.naturalWidth || image.width;
+        canvas.height = image.naturalHeight || image.height;
+        const context = canvas.getContext("2d");
+        if (!context || canvas.width < 1 || canvas.height < 1) return file;
+
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        drawShotWatermark(context, canvas.width, canvas.height, new Date());
+
+        const outputType = file.type === "image/png" ? "image/png" : "image/jpeg";
+        const blob = await new Promise<Blob | null>((resolve) => {
+          canvas.toBlob(resolve, outputType, 0.95);
+        });
+        if (!blob) return file;
+        return new File([blob], file.name, {
+          type: outputType,
+          lastModified: Date.now(),
+        });
+      } catch {
+        return file;
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
+    },
+    [drawShotWatermark, ensureWatermarkFontsLoaded],
+  );
 
   const startCamera = useCallback(
     async (preferredFacing: CameraFacing = cameraFacing) => {
@@ -838,11 +1055,16 @@ export default function CameraLandingPage() {
     uploadPickerRef.current?.click();
   }
 
-  function onUploadPickerChange(event: ChangeEvent<HTMLInputElement>) {
+  async function onUploadPickerChange(event: ChangeEvent<HTMLInputElement>) {
     const selected = Array.from(event.target.files ?? []);
     event.currentTarget.value = "";
     if (selected.length < 1) return;
-    addLocalFilesBatch(selected);
+    setFeedback("Applying watermark...");
+    const processed: File[] = [];
+    for (const file of selected) {
+      processed.push(await applyWatermarkToImageFile(file));
+    }
+    addLocalFilesBatch(processed);
   }
 
   function toggleLocalShotSelection(id: string) {
@@ -992,7 +1214,10 @@ export default function CameraLandingPage() {
     } else {
       context.filter = "none";
     }
+    await ensureWatermarkFontsLoaded();
+    const shotCapturedAt = new Date();
     context.drawImage(video, 0, 0, width, height);
+    drawShotWatermark(context, width, height, shotCapturedAt);
     context.filter = "none";
 
     if (torchEnabled && track) {
@@ -1170,6 +1395,8 @@ export default function CameraLandingPage() {
             cameraCoverImageUrl: payload.settings?.cameraCoverImageUrl ?? "",
             cameraStartButtonLabel:
               payload.settings?.cameraStartButtonLabel ?? "Start Camera",
+            weddingDate: payload.settings?.weddingDate ?? "",
+            weddingTime: payload.settings?.weddingTime ?? "",
           });
           setUploaderName(persistedGuestName);
           setGuestNameDraft(persistedGuestName);

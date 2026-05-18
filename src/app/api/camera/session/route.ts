@@ -61,6 +61,8 @@ export async function GET(request: NextRequest) {
         cameraEventTagline: settings.cameraEventTagline,
         cameraCoverImageUrl: normalizedCoverUrl,
         cameraStartButtonLabel: settings.cameraStartButtonLabel,
+        weddingDate: settings.weddingDate,
+        weddingTime: settings.weddingTime,
       },
     });
   } catch (error) {
