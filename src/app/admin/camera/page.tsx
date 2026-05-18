@@ -1271,7 +1271,7 @@ export default function CameraAdminPage() {
     dataUrl: string;
   }) {
     const printCodeTitle = escapeHtml("Red & Jess");
-    const printCodeSubtitle = escapeHtml("road to forever!");
+    const printCodeSubtitle = escapeHtml("Welcome to our Forever!");
     const printHashtag = escapeHtml("#soaferRED-ynasiJESS");
     const photoRevealAt = escapeHtml(
       formatPhotoRevealTimestamp(settings.cameraGalleryUnlockDate, settings.cameraGalleryUnlockTime),
@@ -1290,7 +1290,15 @@ export default function CameraAdminPage() {
             .card { max-width: 700px; margin: 0 auto; text-align: center; }
             .code-wrap { margin: 4px 0 16px; }
             .code-title { margin-top: 2px; font-family: "Great Vibes", "Times New Roman", serif; font-size: 42px; line-height: 1.1; color: #54382a; }
-            .code-subtitle { margin: 12px 0 0; font-size: 18px; line-height: 1.2; color: #2f1f17; font-weight: 600; }
+            .code-subtitle {
+              margin: 12px 0 0;
+              font-family: "Cormorant Garamond", "Times New Roman", serif;
+              font-size: 22px;
+              line-height: 1.2;
+              color: #2f1f17;
+              font-style: italic;
+              font-weight: 400;
+            }
             .hash-tag {
               margin-top: 2px;
               font-family: "Cormorant Garamond", "Times New Roman", serif;
@@ -1399,7 +1407,7 @@ export default function CameraAdminPage() {
     layout?: "cards" | "poster";
   }) {
     const titleText = escapeHtml("Red & Jess");
-    const subtitleText = escapeHtml("road to forever!");
+    const subtitleText = escapeHtml("Welcome to our Forever!");
     const hashtagText = escapeHtml("#soaferRED-ynasiJESS");
     const photoRevealAt = escapeHtml(
       formatPhotoRevealTimestamp(settings.cameraGalleryUnlockDate, settings.cameraGalleryUnlockTime),
@@ -1496,10 +1504,12 @@ export default function CameraAdminPage() {
             }
             .meta-bottom .subtitle {
               margin-bottom: 1.2mm;
-              font-size: 5mm;
+              font-family: "Cormorant Garamond", "Times New Roman", serif;
+              font-size: 5.5mm;
               line-height: 1.2;
               color: #2f1f17;
-              font-weight: 600;
+              font-style: italic;
+              font-weight: 400;
             }
             .meta-bottom .copy-index {
               margin-top: 2mm;
@@ -1528,10 +1538,12 @@ export default function CameraAdminPage() {
             }
             .poster-subtitle {
               margin: 4mm 0 0;
-              font-size: 9mm;
+              font-family: "Cormorant Garamond", "Times New Roman", serif;
+              font-size: 9.5mm;
               line-height: 1.2;
               color: #2f1f17;
-              font-weight: 600;
+              font-style: italic;
+              font-weight: 400;
             }
             .poster-hash {
               margin: 2mm 0 7mm;
